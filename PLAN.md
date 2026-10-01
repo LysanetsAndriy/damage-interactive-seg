@@ -80,6 +80,10 @@ Full-image evaluation on the 44 validation images (518 px patches, stride 300), 
 - Choosing the checkpoint by lowest validation loss picks a weak early epoch. Future runs (k-fold) use the final epoch.
 - **The paper model stays the prior for the tool.**
 
+### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
+
+Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
+
 ---
 
 ## 1. System overview

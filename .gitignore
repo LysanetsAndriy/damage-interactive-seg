@@ -23,3 +23,6 @@ __pycache__/
 
 # huggingface_hub upload state
 .cache/
+
+# vendored sources (SAM 2)
+third_party/
