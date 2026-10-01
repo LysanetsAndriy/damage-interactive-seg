@@ -55,3 +55,20 @@ def test_loss_is_small_for_perfect_prediction():
     logits = torch.nn.functional.one_hot(target, 6).permute(0, 3, 1, 2).float() * 50
     weights = torch.tensor([0.3, 1.0, 2.5, 1.5, 3.0, 2.8])
     assert CombinedLoss(class_weights=weights)(logits, target).item() < 1e-3
+
+
+def test_duplicate_roof_shapes_keep_damaged_roof():
+    from dmgseg.data.objects import image_objects
+    n_dropped = 0
+    for ann in ANNS:
+        objs = image_objects(ann)
+        geoms = {}
+        for o in objs:
+            s = ann.shapes[o.index]
+            if s.points is not None:
+                key = tuple((round(x, 1), round(y, 1)) for x, y in s.points)
+                assert key not in geoms or s.kind != ann.shapes[geoms[key]].kind
+                geoms[key] = o.index
+        n_dropped += sum(1 for s in ann.shapes if s.kind in ("polygon", "box")) + \
+            sum(1 for s in ann.shapes if s.kind == "mask") - len(objs)
+    assert n_dropped >= 27
