@@ -160,5 +160,42 @@ def _(DEVICE, REPO, WORKDIR, embed_fn, mo, train_button):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## C. Compare checkpoints
+
+    Full-image evaluation (as in A) of the paper model, the new `best.pt`
+    (lowest validation loss) and the new `final.pt` (after the last epoch).
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    compare_button = mo.ui.run_button(label="Compare checkpoints (~3 min)")
+    compare_button
+    return (compare_button,)
+
+
+@app.cell
+def _(DEVICE, WORKDIR, compare_button, embed_model, mo, paths):
+    mo.stop(not compare_button.value)
+
+    from dmgseg import hub as _hub
+    from dmgseg.prior.compare import compare_checkpoints, export_final_weights, results_table
+
+    _run = WORKDIR / "runs" / "dinov2_emb_6c_paper_fixedlabels"
+    if not (_run / "final.pt").exists():
+        export_final_weights(_run)
+    comparison = compare_checkpoints(
+        {"paper model": paths.PRIOR_WEIGHTS, "new best.pt": _run / "best.pt", "new final.pt": _run / "final.pt"},
+        embed_model, DEVICE, _run / "comparison.json")
+    _hub.upload(_run / "comparison.json", f"runs/{_run.name}/comparison.json")
+    mo.md("**Fixed labels**\n\n" + results_table(comparison, "fixed_labels")
+          + "\n\n**Paper labels**\n\n" + results_table(comparison, "paper_labels"))
+    return (comparison,)
+
+
 if __name__ == "__main__":
     app.run()

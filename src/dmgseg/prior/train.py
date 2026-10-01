@@ -185,4 +185,10 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None):
             if not final and (epoch + 1) % cfg.train.get("push_last_every", 5) == 0:
                 hub.upload(run_dir / "last.pt", f"{hub_prefix}/last.pt")
 
+    # Weights after the last epoch (best.pt is chosen by validation loss, which can
+    # favour an early epoch).
+    torch.save(model.state_dict(), run_dir / "final.pt")
+    if push:
+        hub.upload(run_dir / "final.pt", f"{hub_prefix}/final.pt")
+
     return run_dir
