@@ -1,0 +1,25 @@
+# data and weights live on Hugging Face, not in git
+Dataset_CVAT/
+*.pth
+*.pt
+*.onnx
+*.npz
+artifacts/
+
+# paper materials
+*.pdf
+HackDisaster_*.ipynb
+
+# python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# os / editors
+.DS_Store
+.vscode/
+.idea/
+
+# huggingface_hub upload state
+.cache/

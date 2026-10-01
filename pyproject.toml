@@ -1,0 +1,51 @@
+[project]
+name = "dmgseg"
+version = "0.1.0"
+description = "Interactive (click/box/lasso/scribble) segmentation of war-damaged buildings"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pillow",
+    "opencv-python-headless",
+    "scikit-image",
+    "scikit-learn",
+    "huggingface_hub",
+    "pyyaml",
+    "tqdm",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+# Intel Mac: PyTorch has no x86-macOS wheels after 2.2.x, and 2.2 needs numpy < 2.
+mac = [
+    "torch==2.2.2",
+    "torchvision==0.17.2",
+    "timm",
+    "numpy<2",
+]
+# molab / Colab GPUs (Blackwell needs torch >= 2.7).
+cloud = [
+    "torch>=2.7",
+    "torchvision",
+    "timm",
+    "marimo",
+]
+app = [
+    "fastapi",
+    "uvicorn[standard]",
+    "onnxruntime",
+    "python-multipart",
+]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
