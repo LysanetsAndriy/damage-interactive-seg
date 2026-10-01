@@ -1,0 +1,33 @@
+# DINOv2-Emb U-Net, 6 classes, settings from the paper (Table 3, Table 7, Table 8, loss section).
+# The only intended difference from the paper: labels include CVAT brush masks.
+run_name: dinov2_emb_6c_paper_fixedlabels
+seed: 1212
+
+data:
+  label_kinds: [polygon, box, mask]   # paper used [polygon, box]
+  patch_size: 640                      # crop size; patches are resized to model_input
+  stride: 160
+  model_input: 518                     # DINOv2 input size
+
+model:
+  backbone: vit_large_patch14_reg4_dinov2.lvd142m
+  pretrained_backbone: true
+  num_classes: 6
+
+train:
+  epochs: 20
+  batch_size: 4
+  num_workers: 4
+  lr: 2.0e-5
+  weight_decay: 1.0e-3
+  amp_dtype: float16                   # torch.cuda.amp as in the paper
+  push_last_every: 5                   # epochs between resume-checkpoint uploads
+  scheduler: {patience: 2, factor: 0.4}
+  loss: {ce: 0.3, dice: 0.35, iou: 0.35}
+  # Other, Building, Roof, Damage, Broken Window, Damaged roof (Table 7)
+  class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]
+
+eval:
+  # Full-image inference as in the notebook's evaluate_test_set
+  patch_size: 518
+  stride: 300

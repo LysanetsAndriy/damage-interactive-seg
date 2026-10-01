@@ -21,6 +21,10 @@ Data and weights live in the private Hugging Face repo set in `src/dmgseg/paths.
 ## Layout
 
 - `src/dmgseg/data` — CVAT parser (polygon, box, brush mask; polylines ignored), paper split
-- `src/dmgseg/prior` — DINOv2-Emb U-Net (the paper model)
-- `scripts/` — one-off utilities (Hugging Face upload)
+- `src/dmgseg/prior` — DINOv2-Emb U-Net (the paper model): patches, dataset, losses,
+  training with resume + Hugging Face checkpoints, full-image inference returning probabilities
+- `src/dmgseg/eval/metrics.py` — global (standard) and paper-style metrics side by side
+- `configs/` — one YAML per run
+- `scripts/` — one-off utilities (Hugging Face upload, CPU smoke test of training)
+- `tests/` — `pytest`: parser, split, Table 2/3 reproduction, metrics, loss
 - `nb/` — thin marimo notebooks for molab

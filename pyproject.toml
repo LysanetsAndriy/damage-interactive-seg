@@ -13,6 +13,7 @@ dependencies = [
     "pyyaml",
     "tqdm",
     "matplotlib",
+    "albumentations",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ app = [
 ]
 dev = [
     "pytest",
+    "marimo",
 ]
 
 [build-system]
