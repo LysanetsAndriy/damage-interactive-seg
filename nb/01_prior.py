@@ -62,7 +62,7 @@ def _(Path):
     print("weights:", paths.PRIOR_WEIGHTS.name, paths.PRIOR_WEIGHTS.exists())
     print("device:", DEVICE, torch.cuda.get_device_name(0) if DEVICE == "cuda" else "")
     print("torch", torch.__version__)
-    return DEVICE, WORKDIR, paths, torch
+    return DEVICE, WORKDIR, hub, paths, torch
 
 
 @app.cell
@@ -97,7 +97,7 @@ def _(mo):
 
 
 @app.cell
-def _(DEVICE, WORKDIR, embed_model, eval_button, mo, paths):
+def _(DEVICE, WORKDIR, embed_model, eval_button, hub, mo, paths):
     mo.stop(not eval_button.value)
 
     import json
@@ -119,8 +119,7 @@ def _(DEVICE, WORKDIR, embed_model, eval_button, mo, paths):
     _out = WORKDIR / "paper_model_eval.json"
     _out.parent.mkdir(parents=True, exist_ok=True)
     _out.write_text(json.dumps(paper_eval, indent=1))
-    from dmgseg import hub as _hub
-    _hub.upload(_out, "runs/paper_model_eval/metrics.json")
+    hub.upload(_out, "runs/paper_model_eval/metrics.json")
 
     mo.md("\n".join(
         f"- **{k}**: paper-style mF1 {v['paper/mf1']:.4f}, paper-style mIoU {v['paper/miou']:.4f} · "
@@ -179,10 +178,9 @@ def _(mo):
 
 
 @app.cell
-def _(DEVICE, WORKDIR, compare_button, embed_model, mo, paths):
+def _(DEVICE, WORKDIR, compare_button, embed_model, hub, mo, paths):
     mo.stop(not compare_button.value)
 
-    from dmgseg import hub as _hub
     from dmgseg.prior.compare import compare_checkpoints, export_final_weights, results_table
 
     _run = WORKDIR / "runs" / "dinov2_emb_6c_paper_fixedlabels"
@@ -191,7 +189,7 @@ def _(DEVICE, WORKDIR, compare_button, embed_model, mo, paths):
     comparison = compare_checkpoints(
         {"paper model": paths.PRIOR_WEIGHTS, "new best.pt": _run / "best.pt", "new final.pt": _run / "final.pt"},
         embed_model, DEVICE, _run / "comparison.json")
-    _hub.upload(_run / "comparison.json", f"runs/{_run.name}/comparison.json")
+    hub.upload(_run / "comparison.json", f"runs/{_run.name}/comparison.json")
     mo.md("**Fixed labels**\n\n" + results_table(comparison, "fixed_labels")
           + "\n\n**Paper labels**\n\n" + results_table(comparison, "paper_labels"))
     return (comparison,)
