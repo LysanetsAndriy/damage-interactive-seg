@@ -24,16 +24,29 @@ def _deepest_point(region):
     return int(x), int(y), float(dt[y, x])
 
 
+def _bbox(mask):
+    ys, xs = np.nonzero(mask.any(1))[0], np.nonzero(mask.any(0))[0]
+    return ys[0], ys[-1] + 1, xs[0], xs[-1] + 1
+
+
 def next_click(pred, gt):
-    """-> (x, y, is_positive) for the next corrective click."""
+    """-> (x, y, is_positive) for the next corrective click.
+
+    Errors only exist inside the bounding box of gt | pred, so the distance
+    transforms are computed on that crop (same result, much faster). The crop's
+    edge counts as a region border, exactly like the image edge does.
+    """
     if pred is None or not pred.any():
-        x, y, _ = _deepest_point(gt)
-        return x, y, True
-    fn = np.logical_and(gt, ~pred)
-    fp = np.logical_and(pred, ~gt)
+        y0, y1, x0, x1 = _bbox(gt)
+        x, y, _ = _deepest_point(gt[y0:y1, x0:x1])
+        return x + x0, y + y0, True
+    y0, y1, x0, x1 = _bbox(np.logical_or(pred, gt))
+    p, g = pred[y0:y1, x0:x1], gt[y0:y1, x0:x1]
+    fn = np.logical_and(g, ~p)
+    fp = np.logical_and(p, ~g)
     fx, fy, fd = _deepest_point(fn) if fn.any() else (0, 0, -1.0)
     px, py, pd = _deepest_point(fp) if fp.any() else (0, 0, -1.0)
-    return (fx, fy, True) if fd >= pd else (px, py, False)
+    return (fx + x0, fy + y0, True) if fd >= pd else (px + x0, py + y0, False)
 
 
 @dataclass
