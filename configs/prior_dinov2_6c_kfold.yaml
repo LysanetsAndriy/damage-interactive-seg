@@ -1,7 +1,6 @@
-# 5-fold models for out-of-fold priors. Paper settings, but 12 epochs (the full run
-# plateaued after ~8) and the final epoch is used.
-# The only intended difference from the paper: labels include CVAT brush masks.
-run_name: dinov2_emb_6c_kfold
+# 5-fold models for out-of-fold priors, with exactly the recipe of the tool's prior
+# (B2b: batch 16, cosine, layer-wise LR decay 0.8, 15 epochs, final epoch).
+run_name: dinov2_emb_6c_b2b_kfold
 seed: 1212
 
 data:
@@ -16,14 +15,15 @@ model:
   num_classes: 6
 
 train:
-  epochs: 12
-  batch_size: 4
+  epochs: 15
+  batch_size: 16
   num_workers: 4
-  lr: 2.0e-5
+  lr: 4.0e-5                           # 2e-5 x sqrt(16/4)
   weight_decay: 1.0e-3
+  layer_decay: 0.8                     # encoder block i of 21: lr x 0.8^(22 - (i+1))
   amp_dtype: float16                   # torch.cuda.amp as in the paper
-  push_last_every: 6                   # resume checkpoint at epoch 6 only (3.8 GB each)
-  scheduler: {patience: 2, factor: 0.4}
+  push_last_every: 8                   # one resume checkpoint per fold (3.8 GB each)
+  scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
   loss: {ce: 0.3, dice: 0.35, iou: 0.35}
   # Other, Building, Roof, Damage, Broken Window, Damaged roof (Table 7)
   class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]

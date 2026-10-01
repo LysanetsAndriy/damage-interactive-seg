@@ -59,7 +59,7 @@ def _(Path):
 
     from dmgseg import paths
     print("data:", DATA)
-    print("weights:", paths.PRIOR_WEIGHTS.name, paths.PRIOR_WEIGHTS.exists())
+    print("weights:", paths.PAPER_WEIGHTS.name, paths.PAPER_WEIGHTS.exists())
     print("device:", DEVICE, torch.cuda.get_device_name(0) if DEVICE == "cuda" else "")
     print("torch", torch.__version__)
     return DEVICE, WORKDIR, hub, paths, torch
@@ -108,7 +108,7 @@ def _(DEVICE, WORKDIR, embed_model, eval_button, hub, mo, paths):
     from dmgseg.prior.train import split_annotations
     from dmgseg.prior.unet_dinov2 import load_prior_model
 
-    paper_model = load_prior_model(paths.PRIOR_WEIGHTS, DEVICE)
+    paper_model = load_prior_model(paths.PAPER_WEIGHTS, DEVICE)
     _, val_anns = split_annotations()
     paper_eval = {}
     for _labels, _kinds in (("paper_labels", PAPER_KINDS), ("fixed_labels", ("polygon", "box", "mask"))):
@@ -187,7 +187,7 @@ def _(DEVICE, WORKDIR, compare_button, embed_model, hub, mo, paths):
     if not (_run / "final.pt").exists():
         export_final_weights(_run)
     comparison = compare_checkpoints(
-        {"paper model": paths.PRIOR_WEIGHTS, "new best.pt": _run / "best.pt", "new final.pt": _run / "final.pt"},
+        {"paper model": paths.PAPER_WEIGHTS, "new best.pt": _run / "best.pt", "new final.pt": _run / "final.pt"},
         embed_model, DEVICE, _run / "comparison.json")
     hub.upload(_run / "comparison.json", f"runs/{_run.name}/comparison.json")
     mo.md("**Fixed labels**\n\n" + results_table(comparison, "fixed_labels")
@@ -198,36 +198,79 @@ def _(DEVICE, WORKDIR, compare_button, embed_model, hub, mo, paths):
 @app.cell
 def _(mo):
     mo.md("""
-    ## D. Priors for the class head (5-fold, ~3 h)
+    ## D. Priors for the class head (~3.5 h)
 
-    1. Paper-model priors for all 290 images (~5 min).
-    2. Five fold models (12 epochs each) on the 246 training images; each predicts
-       its held-out fold, so every training image gets an out-of-fold prior.
+    The tool's prior is **B2b** (`runs/dinov2_emb_6c_b2b/final.pt`, chosen after E).
 
-    Finished parts are skipped, so pressing the button again resumes.
-    **Start this from the browser** (not through an agent), it runs for hours.
+    1. B2b priors for all 290 images -> `priors/dinov2_emb_6c_b2b/` (~5 min).
+    2. Five fold models with B2b's recipe on the 246 training images; each predicts
+       its held-out fold -> `priors/oof_dinov2_emb_6c_b2b/`. Every training image
+       gets a prior from a model that never saw it.
+
+    Runs in a background thread (survives cell interruptions). Finished parts are
+    skipped, so pressing the button again resumes.
     """)
     return
 
 
 @app.cell
 def _(mo):
-    kfold_button = mo.ui.run_button(label="Compute priors + run 5 folds (~3 h)")
+    kfold_button = mo.ui.run_button(label="B2b priors + 5 folds (~3.5 h)")
     kfold_button
     return (kfold_button,)
 
 
 @app.cell
-def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, kfold_button, mo):
+def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, hub, kfold_button, mo):
     mo.stop(not kfold_button.value)
 
     from dmgseg.config import load_config as _load_config
-    from dmgseg.prior.kfold import paper_priors, run_kfold
+    from dmgseg.prior.experiments import start_in_background as _start, status_writer
+    from dmgseg.prior.kfold import run_prior_job
 
     kfold_cfg = _load_config(REPO / "configs" / "prior_dinov2_6c_kfold.yaml")
-    paper_priors(embed_model, WORKDIR, DEVICE, dict(kfold_cfg.eval))
-    run_kfold(kfold_cfg, WORKDIR, embed_model, embed_fn, DEVICE)
-    print("all folds done")
+    d_message = _start(
+        "d_queue", kfold_cfg, WORKDIR, embed_model, embed_fn, DEVICE,
+        hub.prior_weights(WORKDIR), target=run_prior_job,
+        status=status_writer(WORKDIR, "d_queue"),
+    )
+    mo.md(f"**{d_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    d_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="1m", label="Auto-refresh")
+    d_refresh
+    return (d_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, d_refresh, mo, paths):
+    d_refresh
+
+    import json as _json
+
+    from dmgseg.prior.experiments import is_running as _is_running
+
+    _st_path = WORKDIR / "runs" / "d_queue" / "status.json"
+    _st = _json.loads(_st_path.read_text()) if _st_path.exists() else {}
+    _n_prior = len(list((WORKDIR / "priors" / paths.PRIOR_RUN).glob("*.npz")))
+    _n_oof = len(list((WORKDIR / "priors" / f"oof_{paths.PRIOR_RUN}").glob("*.npz")))
+    _rows = []
+    for _k in range(5):
+        _h = WORKDIR / "runs" / f"dinov2_emb_6c_b2b_kfold_fold{_k}" / "history.json"
+        _hist = _json.loads(_h.read_text()) if _h.exists() else []
+        if _hist:
+            _r = _hist[-1]
+            _rows.append(f"| {_k} | {len(_hist)}/15 | {_r['val']['global/miou']:.4f} | {_r['val']['global/mf1']:.4f} |")
+    mo.md(
+        f"**Job:** {'running' if _is_running('d_queue') else 'not running'} · **state:** {_st.get('state', '-')} · "
+        f"**stage:** {_st.get('stage', '-')} · **updated:** {_st.get('updated', '-')}\n\n"
+        f"**Priors:** B2b {_n_prior}/290 · out-of-fold {_n_oof}/246\n\n"
+        + "| fold | epochs | held-out mIoU | held-out mF1 |\n|---|---|---|---|\n" + "\n".join(_rows)
+        + (f"\n\n**Error**\n```\n{_st['error'][-1500:]}\n```" if _st.get('error') else "")
+    )
     return
 
 
@@ -267,7 +310,7 @@ def _(DEVICE, REPO, WORKDIR, b2_button, embed_fn, embed_model, hub, mo, paths):
         [REPO / "configs" / "prior_dinov2_6c_b2a.yaml", REPO / "configs" / "prior_dinov2_6c_b2b.yaml"],
         WORKDIR, embed_model, embed_fn, DEVICE,
         baselines={
-            "paper model": paths.PRIOR_WEIGHTS,
+            "paper model": paths.PAPER_WEIGHTS,
             "B1 paper settings": WORKDIR / "runs" / "dinov2_emb_6c_paper_fixedlabels" / "final.pt",
         },
     )

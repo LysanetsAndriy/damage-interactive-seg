@@ -20,6 +20,11 @@ from dmgseg.prior.train import train
 _threads = {}
 
 
+def status_writer(workdir, queue):
+    """-> status(**fields) that updates runs/<queue>/status.json locally and on the Hub."""
+    return lambda **fields: _status(workdir, queue, **fields)
+
+
 def _status(workdir, queue, **fields):
     path = Path(workdir) / "runs" / queue / "status.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,12 +68,15 @@ def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, basel
         raise
 
 
-def start_in_background(queue, *args, **kwargs):
-    """Start run_queue in a daemon thread unless this queue is already running."""
+def start_in_background(queue, *args, target=None, **kwargs):
+    """Start target (default run_queue(queue, ...)) in a daemon thread unless a job
+    with this name is already running."""
     t = _threads.get(queue)
     if t is not None and t.is_alive():
         return f"{queue}: already running"
-    t = threading.Thread(target=run_queue, args=(queue, *args), kwargs=kwargs, name=queue, daemon=True)
+    if target is None:
+        target, args = run_queue, (queue, *args)
+    t = threading.Thread(target=target, args=args, kwargs=kwargs, name=queue, daemon=True)
     t.start()
     _threads[queue] = t
     return f"{queue}: started"

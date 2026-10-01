@@ -25,11 +25,18 @@ CVAT_DIR = _first_existing(DATA_ROOT / "Dataset_CVAT", DATA_ROOT / "dataset")
 ANNOTATIONS_XML = CVAT_DIR / "annotations.xml"
 IMAGES_DIR = CVAT_DIR / "images" / "default"
 
-# The paper's 6-class DINOv2-Emb model (local file name / Hugging Face name).
-PRIOR_WEIGHTS = _first_existing(
+# The paper's published 6-class DINOv2-Emb model (local file name / Hugging Face name).
+# Kept as the reference in all comparisons.
+PAPER_WEIGHTS = _first_existing(
     DATA_ROOT / "best_model_dinov2_6_classes_6e.pth",
     DATA_ROOT / "weights" / "paper_dinov2_emb_6class.pth",
 )
+PRIOR_WEIGHTS = PAPER_WEIGHTS  # old name, still used by already-created notebook cells
+
+# The prior used by the tool: B2b (batch 16, cosine, layer-wise LR decay), final
+# epoch; chosen 2026-10-01 (global mIoU 0.610 vs 0.607 for the paper model, with
+# no validation-set-based checkpoint selection). Fetched with hub.prior_weights().
+PRIOR_RUN = "dinov2_emb_6c_b2b"
 
 SPLIT_FILE = PROJECT_ROOT / "data" / "splits" / "paper_split.json"
 

@@ -36,3 +36,16 @@ def download_if_exists(path_in_repo, local_dir, repo=paths.HF_REPO):
         return Path(hf_hub_download(repo, path_in_repo, repo_type="dataset", local_dir=local_dir))
     except EntryNotFoundError:
         return None
+
+
+def prior_weights(local_dir=None):
+    """Local path of the tool's prior weights (runs/<PRIOR_RUN>/final.pt),
+    downloading them from the Hub the first time."""
+    local_dir = Path(local_dir or paths.ARTIFACTS)
+    target = local_dir / "runs" / paths.PRIOR_RUN / "final.pt"
+    if target.exists():
+        return target
+    path = download_if_exists(f"runs/{paths.PRIOR_RUN}/final.pt", local_dir)
+    if path is None:
+        raise FileNotFoundError(f"runs/{paths.PRIOR_RUN}/final.pt is not on the Hub")
+    return path

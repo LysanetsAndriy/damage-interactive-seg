@@ -38,7 +38,7 @@ try:
     run_dir = train(cfg, workdir, fake_embed, device="cpu", push=False, max_batches=1)
     print("files:", sorted(p.name for p in run_dir.iterdir()))
 
-    model = load_prior_model(paths.PRIOR_WEIGHTS)
+    model = load_prior_model(paths.PAPER_WEIGHTS)
     anns = {a.name: a for a in parse_annotations(paths.ANNOTATIONS_XML)}
     val = [anns[load_split()["val"][2]]]
     m = evaluate_full_images(model, FakeEmbedder(), val, ("polygon", "box", "mask"),

@@ -29,9 +29,9 @@ def main():
         ignore_patterns=[".DS_Store", "**/.DS_Store"],
     )
 
-    print(f"Uploading {paths.PRIOR_WEIGHTS.name} -> weights/paper_dinov2_emb_6class.pth")
+    print(f"Uploading {paths.PAPER_WEIGHTS.name} -> weights/paper_dinov2_emb_6class.pth")
     api.upload_file(
-        path_or_fileobj=str(paths.PRIOR_WEIGHTS),
+        path_or_fileobj=str(paths.PAPER_WEIGHTS),
         path_in_repo="weights/paper_dinov2_emb_6class.pth",
         repo_id=args.repo,
         repo_type="dataset",
