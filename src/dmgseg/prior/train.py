@@ -6,6 +6,7 @@ Additions over the notebook (training itself is unchanged):
 - metrics in both conventions (see dmgseg.eval.metrics).
 """
 import json
+import math
 import random
 import sys
 import time
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -65,7 +66,51 @@ def _grad_scaler(enabled):
         return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
-def run_epoch(model, loader, criterion, device, amp_dtype, optimizer=None, scaler=None):
+def param_groups(model, lr, weight_decay, layer_decay=None):
+    """One group for everything, or (layer_decay < 1) layer-wise LR decay for the
+    DINOv2 encoder: decoder/bottleneck/embedding layers get lr, encoder block i of
+    n gets lr * layer_decay ** (n - i), patch/position embeddings the smallest."""
+    if not layer_decay or layer_decay >= 1:
+        return [{"params": [p for p in model.parameters() if p.requires_grad],
+                 "lr": lr, "weight_decay": weight_decay}]
+    n_blocks = 1 + max(int(n.split("blocks.")[1].split(".")[0])
+                       for n, _ in model.encoder.named_parameters() if "blocks." in n)
+    top = n_blocks + 1  # decoder side
+    groups = {}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if name.startswith("encoder."):
+            layer = int(name.split("blocks.")[1].split(".")[0]) + 1 if "blocks." in name else 0
+        else:
+            layer = top
+        scale = layer_decay ** (top - layer)
+        g = groups.setdefault(layer, {"params": [], "lr": lr * scale, "weight_decay": weight_decay})
+        g["params"].append(p)
+    return [groups[k] for k in sorted(groups)]
+
+
+def make_scheduler(optimizer, sched_cfg, steps_per_epoch, epochs):
+    """-> (scheduler, per_step). "plateau" (paper, steps on validation loss each
+    epoch) or "cosine" (linear warm-up, cosine decay per batch; no validation use)."""
+    sched_cfg = dict(sched_cfg)
+    kind = sched_cfg.pop("type", "plateau")
+    if kind == "plateau":
+        return ReduceLROnPlateau(optimizer, mode="min", **sched_cfg), False
+    warmup = int(sched_cfg.get("warmup_epochs", 1) * steps_per_epoch)
+    total = epochs * steps_per_epoch
+    floor = sched_cfg.get("min_lr_ratio", 0.01)
+
+    def factor(step):
+        if step < warmup:
+            return (step + 1) / max(warmup, 1)
+        t = (step - warmup) / max(total - warmup, 1)
+        return floor + (1 - floor) * 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+    return LambdaLR(optimizer, factor), True
+
+
+def run_epoch(model, loader, criterion, device, amp_dtype, optimizer=None, scaler=None,
+              step_scheduler=None):
     """One pass over loader. Trains if optimizer is given. Returns (mean loss, SegMetrics)."""
     training = optimizer is not None
     model.train(training)
@@ -85,6 +130,8 @@ def run_epoch(model, loader, criterion, device, amp_dtype, optimizer=None, scale
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+                if step_scheduler is not None:
+                    step_scheduler.step()
             total_loss += loss.item() * imgs.size(0)
             n += imgs.size(0)
             metrics.update(logits.argmax(1), masks)
@@ -135,8 +182,9 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
                        pretrained=cfg.model.pretrained_backbone).to(device)
     weights = torch.tensor(cfg.train.class_weights, dtype=torch.float32, device=device)
     criterion = CombinedLoss(**cfg.train.loss, class_weights=weights).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", **cfg.train.scheduler)
+    optimizer = torch.optim.AdamW(param_groups(model, cfg.train.lr, cfg.train.weight_decay,
+                                               cfg.train.get("layer_decay")))
+    scheduler, per_step = make_scheduler(optimizer, cfg.train.scheduler, len(train_loader), cfg.train.epochs)
     amp_dtype = getattr(torch, cfg.train.amp_dtype)
     scaler = _grad_scaler(enabled=device.type == "cuda" and amp_dtype == torch.float16)
 
@@ -156,13 +204,15 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
 
     for epoch in range(start_epoch, cfg.train.epochs):
         t0 = time.time()
-        train_loss, train_m = run_epoch(model, train_loader, criterion, device, amp_dtype, optimizer, scaler)
+        train_loss, train_m = run_epoch(model, train_loader, criterion, device, amp_dtype, optimizer, scaler,
+                                        step_scheduler=scheduler if per_step else None)
         val_loss, val_m = run_epoch(model, val_loader, criterion, device, amp_dtype)
-        scheduler.step(val_loss)
+        if not per_step:
+            scheduler.step(val_loss)
 
         record = {
             "epoch": epoch, "seconds": round(time.time() - t0, 1),
-            "lr": optimizer.param_groups[0]["lr"],
+            "lr": optimizer.param_groups[-1]["lr"],
             "train_loss": train_loss, "val_loss": val_loss,
             "train": summary(train_m.compute(), CLASS_NAMES),
             "val": summary(val_m.compute(), CLASS_NAMES),

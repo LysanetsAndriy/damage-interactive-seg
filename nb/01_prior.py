@@ -231,5 +231,49 @@ def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, kfold_button, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## E. B2a / B2b: training settings for a 96 GB GPU (~1.5 h)
+
+    - **B2a**: batch 16, LR 4e-5, cosine schedule with 1 warm-up epoch, 15 epochs.
+    - **B2b**: B2a + layer-wise LR decay 0.8 for the DINOv2 encoder.
+
+    Both use the final epoch, then everything is compared on full validation
+    images against the paper model and B1 (paper settings, retrained).
+    Runs in a background thread: the cell returns at once and the training
+    survives interruptions of the cell. Progress: `runs/b2_queue/status.json`
+    and `runs/<run>/history.json` on Hugging Face.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    b2_button = mo.ui.run_button(label="Run B2a then B2b, then compare (~1.5 h)")
+    b2_button
+    return (b2_button,)
+
+
+@app.cell
+def _(DEVICE, REPO, WORKDIR, b2_button, embed_fn, embed_model, hub, mo, paths):
+    mo.stop(not b2_button.value)
+
+    from dmgseg.prior.experiments import start_in_background
+
+    hub.download_if_exists("runs/dinov2_emb_6c_paper_fixedlabels/final.pt", WORKDIR)
+    b2_message = start_in_background(
+        "b2_queue",
+        [REPO / "configs" / "prior_dinov2_6c_b2a.yaml", REPO / "configs" / "prior_dinov2_6c_b2b.yaml"],
+        WORKDIR, embed_model, embed_fn, DEVICE,
+        baselines={
+            "paper model": paths.PRIOR_WEIGHTS,
+            "B1 paper settings": WORKDIR / "runs" / "dinov2_emb_6c_paper_fixedlabels" / "final.pt",
+        },
+    )
+    mo.md(f"**{b2_message}**")
+    return
+
+
 if __name__ == "__main__":
     app.run()
