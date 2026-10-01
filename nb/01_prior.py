@@ -275,5 +275,38 @@ def _(DEVICE, REPO, WORKDIR, b2_button, embed_fn, embed_model, hub, mo, paths):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    b2_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="30s", label="Auto-refresh")
+    b2_refresh
+    return (b2_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, b2_refresh, mo, torch):
+    b2_refresh
+
+    import json as _json
+
+    from dmgseg.prior.experiments import is_running as _is_running
+
+    _rows = []
+    for _run in ("dinov2_emb_6c_b2a", "dinov2_emb_6c_b2b"):
+        _h = WORKDIR / "runs" / _run / "history.json"
+        for _r in (_json.loads(_h.read_text()) if _h.exists() else []):
+            _rows.append(f"| {_run[-3:].upper()} | {_r['epoch'] + 1} | {_r['seconds']:.0f}s | {_r['train_loss']:.4f} | {_r['val_loss']:.4f} | {_r['val']['global/miou']:.4f} | {_r['val']['global/mf1']:.4f} | {_r['lr']:.1e} |")
+    _st_path = WORKDIR / "runs" / "b2_queue" / "status.json"
+    _st = _json.loads(_st_path.read_text()) if _st_path.exists() else {}
+    _gpu = f"{torch.cuda.memory_allocated() / 1e9:.1f} GB allocated / {torch.cuda.max_memory_allocated() / 1e9:.1f} GB peak" if torch.cuda.is_available() else "no GPU"
+    mo.md(
+        f"**Queue:** {'running' if _is_running('b2_queue') else 'not running'} · **state:** {_st.get('state', '-')} {_st.get('run', '')} · **updated:** {_st.get('updated', '-')} · **GPU:** {_gpu}\n\n"
+        + "| run | epoch | time | train loss | val loss | val mIoU | val mF1 | LR |\n|---|---|---|---|---|---|---|---|\n"
+        + "\n".join(_rows)
+        + (f"\n\n**Result**\n\n{_st['table']}" if _st.get('table') else "")
+        + (f"\n\n**Error**\n```\n{_st['error'][-1500:]}\n```" if _st.get('error') else "")
+    )
+    return
+
+
 if __name__ == "__main__":
     app.run()
