@@ -28,7 +28,7 @@ def _():
     REPO_URL = "https://github.com/LysanetsAndriy/damage-interactive-seg.git"
     REPO = Path.home() / "damage-interactive-seg"
     if (REPO / ".git").exists():
-        subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"], check=True)
+        subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"])
     else:
         subprocess.run(["git", "clone", REPO_URL, str(REPO)], check=True)
 

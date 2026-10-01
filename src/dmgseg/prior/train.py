@@ -7,6 +7,7 @@ Additions over the notebook (training itself is unchanged):
 """
 import json
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -115,6 +116,10 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None):
         val_ds.files = val_ds.files[:max_batches * bs]
     loader_kw = dict(batch_size=cfg.train.batch_size, num_workers=cfg.train.num_workers,
                      pin_memory=device.type == "cuda", persistent_workers=cfg.train.num_workers > 0)
+    if cfg.train.num_workers > 0 and sys.platform == "linux":
+        # marimo/molab default to "spawn", whose workers re-import the notebook and
+        # re-run its cells; "fork" (PyTorch's usual Linux default) does not.
+        loader_kw["multiprocessing_context"] = "fork"
     train_loader = DataLoader(train_ds, shuffle=True, **loader_kw)
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kw)
     print(f"patches: train={len(train_ds)} val={len(val_ds)} | device={device}")
