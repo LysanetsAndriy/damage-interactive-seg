@@ -249,23 +249,23 @@ def _(mo):
 def _(WORKDIR, d_refresh, mo, paths):
     d_refresh
 
-    import json as _json
+    import json as _djson
 
-    from dmgseg.prior.experiments import is_running as _is_running
+    from dmgseg.prior.experiments import is_running as _d_running
 
     _st_path = WORKDIR / "runs" / "d_queue" / "status.json"
-    _st = _json.loads(_st_path.read_text()) if _st_path.exists() else {}
+    _st = _djson.loads(_st_path.read_text()) if _st_path.exists() else {}
     _n_prior = len(list((WORKDIR / "priors" / paths.PRIOR_RUN).glob("*.npz")))
     _n_oof = len(list((WORKDIR / "priors" / f"oof_{paths.PRIOR_RUN}").glob("*.npz")))
     _rows = []
     for _k in range(5):
         _h = WORKDIR / "runs" / f"dinov2_emb_6c_b2b_kfold_fold{_k}" / "history.json"
-        _hist = _json.loads(_h.read_text()) if _h.exists() else []
+        _hist = _djson.loads(_h.read_text()) if _h.exists() else []
         if _hist:
             _r = _hist[-1]
             _rows.append(f"| {_k} | {len(_hist)}/15 | {_r['val']['global/miou']:.4f} | {_r['val']['global/mf1']:.4f} |")
     mo.md(
-        f"**Job:** {'running' if _is_running('d_queue') else 'not running'} · **state:** {_st.get('state', '-')} · "
+        f"**Job:** {'running' if _d_running('d_queue') else 'not running'} · **state:** {_st.get('state', '-')} · "
         f"**stage:** {_st.get('stage', '-')} · **updated:** {_st.get('updated', '-')}\n\n"
         f"**Priors:** B2b {_n_prior}/290 · out-of-fold {_n_oof}/246\n\n"
         + "| fold | epochs | held-out mIoU | held-out mF1 |\n|---|---|---|---|\n" + "\n".join(_rows)
