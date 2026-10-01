@@ -195,5 +195,41 @@ def _(DEVICE, WORKDIR, compare_button, embed_model, hub, mo, paths):
     return (comparison,)
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## D. Priors for the class head (5-fold, ~3 h)
+
+    1. Paper-model priors for all 290 images (~5 min).
+    2. Five fold models (12 epochs each) on the 246 training images; each predicts
+       its held-out fold, so every training image gets an out-of-fold prior.
+
+    Finished parts are skipped, so pressing the button again resumes.
+    **Start this from the browser** (not through an agent), it runs for hours.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    kfold_button = mo.ui.run_button(label="Compute priors + run 5 folds (~3 h)")
+    kfold_button
+    return (kfold_button,)
+
+
+@app.cell
+def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, kfold_button, mo):
+    mo.stop(not kfold_button.value)
+
+    from dmgseg.config import load_config as _load_config
+    from dmgseg.prior.kfold import paper_priors, run_kfold
+
+    kfold_cfg = _load_config(REPO / "configs" / "prior_dinov2_6c_kfold.yaml")
+    paper_priors(embed_model, WORKDIR, DEVICE, dict(kfold_cfg.eval))
+    run_kfold(kfold_cfg, WORKDIR, embed_model, embed_fn, DEVICE)
+    print("all folds done")
+    return
+
+
 if __name__ == "__main__":
     app.run()

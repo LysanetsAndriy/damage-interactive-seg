@@ -91,12 +91,14 @@ def run_epoch(model, loader, criterion, device, amp_dtype, optimizer=None, scale
     return total_loss / max(n, 1), metrics
 
 
-def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None):
+def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, split=None):
     """Train with cfg (see configs/prior_dinov2_6c_paper.yaml).
 
     workdir: local folder for patches and checkpoints.
     embed_fn: PIL image -> 1536-d global embedding (used only to build patches).
     max_batches: limit batches per epoch (smoke tests only).
+    split: optional {"train": names, "heldout": names}, both subsets of the paper's
+        training images (k-fold). Default: paper train / paper validation.
     """
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     workdir = Path(workdir)
@@ -108,8 +110,13 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None):
     set_seed(cfg.seed)
     dirs = prepare_patches(cfg, embed_fn, workdir)
     size = cfg.data.model_input
-    train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size))
-    val_ds = PatchedDataset(dirs["val"], size=size)
+    if split is None:
+        train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size))
+        val_ds = PatchedDataset(dirs["val"], size=size)
+    else:
+        train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size),
+                                  sources=split["train"])
+        val_ds = PatchedDataset(dirs["train"], size=size, sources=split["heldout"])
     if max_batches:
         bs = cfg.train.batch_size
         train_ds.files = train_ds.files[:max_batches * bs]

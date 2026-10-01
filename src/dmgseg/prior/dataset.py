@@ -1,4 +1,5 @@
 """Patch dataset and augmentations, ported from the notebook."""
+import json
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,16 @@ def train_transform(size):
     ])
 
 
+def patch_sources(patch_dir):
+    """{patch file name: source image name}, cached in _sources.json."""
+    cache = Path(patch_dir) / "_sources.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    index = {f.name: str(np.load(f)["source"]) for f in sorted(Path(patch_dir).glob("*.npz"))}
+    cache.write_text(json.dumps(index))
+    return index
+
+
 class PatchedDataset(Dataset):
     """Reads the .npz patches written by patches.build_patch_dataset.
 
@@ -31,8 +42,12 @@ class PatchedDataset(Dataset):
     as in the notebook.
     """
 
-    def __init__(self, patch_dir, size=518, transform=None):
+    def __init__(self, patch_dir, size=518, transform=None, sources=None):
         self.files = sorted(Path(patch_dir).glob("*.npz"))
+        if sources is not None:
+            index = patch_sources(patch_dir)
+            keep = set(sources)
+            self.files = [f for f in self.files if index[f.name] in keep]
         self.size = size
         self.transform = transform
         self.normalize = transforms.Compose([

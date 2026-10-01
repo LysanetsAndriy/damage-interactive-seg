@@ -5,7 +5,7 @@ called sklearn's train_test_split(test_size=0.15, random_state=1212).
 """
 import json
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, train_test_split
 
 from dmgseg import paths
 from dmgseg.data.cvat import PAPER_KINDS, parse_annotations
@@ -31,6 +31,25 @@ def load_split(path=paths.SPLIT_FILE):
     return json.loads(path.read_text())
 
 
+KFOLD_FILE = paths.SPLIT_FILE.parent / "kfold5_train.json"
+
+
+def kfold_split(train_names, k=5, seed=PAPER_SEED):
+    """k folds over the paper's TRAINING images only (validation stays untouched).
+    Returns a list of {"train": [...], "heldout": [...]}."""
+    folds = []
+    for tr, ho in KFold(n_splits=k, shuffle=True, random_state=seed).split(train_names):
+        folds.append({"train": [train_names[i] for i in tr], "heldout": [train_names[i] for i in ho]})
+    return folds
+
+
+def load_kfold(path=KFOLD_FILE):
+    return json.loads(path.read_text())
+
+
 if __name__ == "__main__":
     s = write_split_file()
     print(f"train={len(s['train'])} val={len(s['val'])} -> {paths.SPLIT_FILE}")
+    folds = kfold_split(s["train"])
+    KFOLD_FILE.write_text(json.dumps(folds, indent=1, ensure_ascii=False))
+    print("folds (train/heldout):", [(len(f["train"]), len(f["heldout"])) for f in folds], "->", KFOLD_FILE)
