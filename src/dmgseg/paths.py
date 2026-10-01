@@ -25,9 +25,10 @@ CVAT_DIR = _first_existing(DATA_ROOT / "Dataset_CVAT", DATA_ROOT / "dataset")
 ANNOTATIONS_XML = CVAT_DIR / "annotations.xml"
 IMAGES_DIR = CVAT_DIR / "images" / "default"
 
+# The paper's 6-class DINOv2-Emb model (local file name / Hugging Face name).
 PRIOR_WEIGHTS = _first_existing(
-    DATA_ROOT / "best_model2_dinov2_640to518_simple_unet.pth",
-    DATA_ROOT / "weights" / "paper_dinov2_emb_3class.pth",
+    DATA_ROOT / "best_model_dinov2_6_classes_6e.pth",
+    DATA_ROOT / "weights" / "paper_dinov2_emb_6class.pth",
 )
 
 SPLIT_FILE = PROJECT_ROOT / "data" / "splits" / "paper_split.json"

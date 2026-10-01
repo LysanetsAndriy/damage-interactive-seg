@@ -60,9 +60,9 @@ The app shows a progress bar during the prior and caches results. For the 290 da
 
 The paper's split comes from `train_test_split(annotations, test_size=0.15, random_state=1212)` over the images in XML order, which gives 246 / 44. We reproduce it and save it as `data/splits/paper_split.json`. **The 44 validation images are never used for training anything in this project.**
 
-### 0.5 The weights file in the folder is the 3-class model
+### 0.5 Weights
 
-`best_model2_dinov2_640to518_simple_unet.pth` loads into `UNetDinoV2` with `strict=True` (315.5M parameters, matching Table 9) only as **3 classes**: `conv_last` has shape [3, 256, 1, 1]. The 6-class DINOv2-Emb checkpoint referenced in the notebook is `best_model_dinov2_6_classes_6e.pth` (Google Drive, `MyDrive/CVAT/`). **We need that file.** If it's lost, we retrain the 6-class model on molab (on the full annotations from 0.1, which is experiment E6 anyway). Measured CPU speed on the Mac: **3.8 s per 518 px patch**.
+The first file provided (`best_model2_dinov2_640to518_simple_unet.pth`) turned out to be the **3-class** DINOv2-Emb model. The 6-class checkpoint `best_model_dinov2_6_classes_6e.pth` was then recovered from Google Drive (2026-10-01). It loads into `UNetDinoV2(num_classes=6)` with `strict=True` (315.5M parameters). It is on Hugging Face as `weights/paper_dinov2_emb_6class.pth`, and the 3-class file was removed (still in the repo history). **To check:** that this is the published model, by recomputing the paper's validation metrics with the paper's evaluation code (expected mean F1 ≈ 0.746). CPU speed on the Mac: **3.8 s per 518 px patch**.
 
 ---
 

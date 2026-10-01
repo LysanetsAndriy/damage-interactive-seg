@@ -1,4 +1,4 @@
-"""Upload the dataset and the paper (3-class) weights to a private Hugging Face dataset repo.
+"""Upload the dataset and the paper's 6-class weights to a private Hugging Face dataset repo.
 
 Run once from the Mac after `hf auth login`:
     python scripts/upload_to_hf.py
@@ -29,10 +29,10 @@ def main():
         ignore_patterns=[".DS_Store", "**/.DS_Store"],
     )
 
-    print(f"Uploading {paths.PRIOR_WEIGHTS.name} -> weights/paper_dinov2_emb_3class.pth")
+    print(f"Uploading {paths.PRIOR_WEIGHTS.name} -> weights/paper_dinov2_emb_6class.pth")
     api.upload_file(
         path_or_fileobj=str(paths.PRIOR_WEIGHTS),
-        path_in_repo="weights/paper_dinov2_emb_3class.pth",
+        path_in_repo="weights/paper_dinov2_emb_6class.pth",
         repo_id=args.repo,
         repo_type="dataset",
     )
