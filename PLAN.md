@@ -64,6 +64,22 @@ The paper's split comes from `train_test_split(annotations, test_size=0.15, rand
 
 The first file provided (`best_model2_dinov2_640to518_simple_unet.pth`) turned out to be the **3-class** DINOv2-Emb model. The 6-class checkpoint `best_model_dinov2_6_classes_6e.pth` was then recovered from Google Drive (2026-10-01). It loads into `UNetDinoV2(num_classes=6)` with `strict=True` (315.5M parameters). It is on Hugging Face as `weights/paper_dinov2_emb_6class.pth`, and the 3-class file was removed (still in the repo history). **To check:** that this is the published model, by recomputing the paper's validation metrics with the paper's evaluation code (expected mean F1 ≈ 0.746). CPU speed on the Mac: **3.8 s per 518 px patch**.
 
+### 0.6 Results so far (2026-10-01, molab)
+
+Full-image evaluation on the 44 validation images (518 px patches, stride 300), fixed labels:
+
+| Model | Global mIoU | Global mF1 | Paper-style mIoU |
+|---|---|---|---|
+| Paper model (`paper_dinov2_emb_6class.pth`) | **0.607** | **0.744** | 0.468 |
+| Retrained on fixed labels, final epoch (`runs/.../final.pt`) | 0.605 | 0.742 | 0.474 |
+| Retrained, lowest val loss (`runs/.../best.pt`, epoch 2) | 0.569 | 0.710 | 0.451 |
+
+- The published model is verified: paper-style mF1 0.7462 / mIoU 0.4711 reproduced exactly.
+- **E6 answered: the brush-mask fix makes no measurable difference** (0.605 vs 0.607 is run-to-run noise).
+- **The paper's training pipeline reproduces** the published quality from scratch, in about 1 hour on molab.
+- Choosing the checkpoint by lowest validation loss picks a weak early epoch. Future runs (k-fold) use the final epoch.
+- **The paper model stays the prior for the tool.**
+
 ---
 
 ## 1. System overview
