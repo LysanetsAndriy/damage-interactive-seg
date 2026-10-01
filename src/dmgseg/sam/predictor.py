@@ -17,8 +17,9 @@ SAM2_MODELS = {
 
 class SamClicker:
     """choose: how to pick among the 3 first-click masks:
-    "score" (SAM's predicted IoU, the realistic default) or "oracle" (best IoU
-    against `oracle_gt`, an upper bound for analysis only).
+    "score" (SAM's predicted IoU, the realistic default), "oracle" (best IoU
+    against `oracle_gt`, an upper bound for analysis only), or a callable
+    choose(masks, scores, x, y) -> index (e.g. a prior-based rule).
     """
 
     def __init__(self, size="small", device="cpu", choose="score", predictor=None):
@@ -58,6 +59,9 @@ class SamClicker:
         return masks[k].astype(bool)
 
     def _pick(self, masks, scores):
+        if callable(self.choose):
+            x, y = self.points[0]
+            return int(self.choose(masks, scores, x, y))
         if self.choose == "oracle" and self.oracle_gt is not None:
             gt = self.oracle_gt
             return int(np.argmax([(m & gt).sum() / max((m | gt).sum(), 1) for m in masks]))
