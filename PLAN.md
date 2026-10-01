@@ -80,6 +80,15 @@ Full-image evaluation on the 44 validation images (518 px patches, stride 300), 
 - Choosing the checkpoint by lowest validation loss picks a weak early epoch. Future runs (k-fold) use the final epoch.
 - **The paper model stays the prior for the tool.**
 
+### 0.6b Training settings for the 96 GB GPU (E, 2026-10-01): B2b becomes the prior
+
+Full-image global mIoU on the validation set (fixed labels): paper model 0.607 · B1 (paper recipe, retrained) 0.605 · **B2a** (batch 16, LR 4e-5, cosine + warm-up, 15 epochs) 0.599 · **B2b** (B2a + layer-wise LR decay 0.8) **0.610**.
+
+- No setting is clearly better (differences ≈ run-to-run noise). The T4-era batch size was **not** the bottleneck; the data size is.
+- Layer-wise LR decay is the only change that helps consistently (Damage, Broken Window, Damaged roof).
+- **Decision:** the tool's prior is **B2b** (`runs/dinov2_emb_6c_b2b/final.pt`, `paths.PRIOR_RUN`). Its recipe never uses the validation set (fixed schedule, final epoch), unlike the paper model's lowest-val-loss selection. The paper model (`paths.PAPER_WEIGHTS`) stays the published reference.
+- The k-fold (section D) uses the B2b recipe → `priors/dinov2_emb_6c_b2b/` (all images) and `priors/oof_dinov2_emb_6c_b2b/` (out-of-fold, training images).
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
