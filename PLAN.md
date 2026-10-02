@@ -111,6 +111,18 @@ Robustness to where the user clicks first (saved head A, the same 1,314 objects)
 
 The class choice is insensitive to the click position; mask quality drops slightly for careless clicks, and the head stays ahead of SAM's own choice.
 
+**Class head B v1 (fusion on 16×16 feature-map crops) is worse than A** (molab, section H; 3 seeds each, validation):
+
+| | Right class | Manual | 1st-click IoU |
+|---|---|---|---|
+| Rules | 56.8 % | 21.5 % | 0.565 |
+| **Head A** | **80.4 %** | **2.8 %** | **0.591** |
+| B full (DINOv2 + SAM + prior) | 68.7 ± 2.6 % | 5.8 % | 0.514 |
+| B without DINOv2 | 71.1 ± 0.7 % | 5.6 % | 0.540 |
+| B without SAM | 71.6 ± 0.3 % | 5.3 % | 0.525 |
+
+Diagnosis: (1) one crop per click is sized by the largest of SAM's 3 candidates, so small candidates cover a few cells of the 16×16 grid and the exact per-mask statistics that A uses are lost; (2) unstable, majority-biased training (e.g. no_dino seed 0: Broken Window 99 %, Damage 4 %); (3) more inputs → worse (overfitting with ~50k samples). Not used in the app.
+
 Inference-scale test: B2b at 640→518 crops 0.6096 vs 518 native 0.6100, no difference. RandomResizedCrop(0.6–0.8) already zooms training patches by 1.12–1.29×, so the effective training scale was ~100 %.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
