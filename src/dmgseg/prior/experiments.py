@@ -109,6 +109,11 @@ def _quiet_progress_bars():
     marimo's stream). Progress goes to the job's status file instead."""
     import tqdm as _tqdm_mod
     cls = _tqdm_mod.tqdm
+    # A fresh write lock per job: a thread that crashed while holding tqdm's shared
+    # lock (it happened: a marimo stream error inside tqdm.write) would otherwise
+    # block every later progress bar in this process forever.
+    from tqdm.std import TqdmDefaultWriteLock
+    cls.set_lock(TqdmDefaultWriteLock())
     if not getattr(cls, "_dmgseg_quiet", False):
         original = cls.__init__
 
