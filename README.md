@@ -30,8 +30,14 @@ Data and weights live in the private Hugging Face repo set in `src/dmgseg/paths.
 ## The app (Damage Annotator)
 
 ```bash
-.venv/bin/python -m dmgseg.app                 # or: python -m dmgseg.app path/to/image.jpg
+.venv/bin/python -m dmgseg.app                 # File > Open Folder / Open Image
+.venv/bin/python -m dmgseg.app path/to/folder  # open a folder of images directly
 ```
+
+Folder mode: progress is saved automatically in `<folder>/_damage_annotator/`;
+the DINOv2 prior is cached there and pre-computed for the next images in the
+background; Page Up/Down switch images; File > Export CVAT XML exports the folder
+(masks: exact; polygons: outlines) for CVAT or the training parser.
 
 A Windows-98-style desktop tool. Left click: new object (SAM mask, class and mask
 chosen by class head A); right click / Ctrl+click: next class; Shift+click: grow;

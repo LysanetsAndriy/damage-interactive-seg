@@ -78,3 +78,46 @@ def test_pending_then_classified_paint_order_undo_and_export(tmp_path):
     assert s.objects[b].ranking[-1] == 0
     s.delete(a)
     assert len(s.objects) == 2
+
+
+def _session_with_objects(h=60, w=80):
+    s = Session(np.zeros((h, w, 3), np.uint8), FakeClicker(h, w), head=None)
+    s.set_prior(make_prior(h, w, 1))
+    b = s.new_object(30, 30)                 # Building square r=6 (SAM's top-scored candidate)
+    s.set_class(b, 1)
+    win = s.new_object(32, 32)               # a window on it
+    s.set_class(win, 4)
+    tree = s.new_object(27, 27)              # a tree in front, marked Other
+    s.set_class(tree, 0)
+    return s
+
+
+def test_state_roundtrip():
+    s = _session_with_objects()
+    state = s.to_state()
+    s2 = Session(np.zeros((60, 80, 3), np.uint8), FakeClicker(60, 80), head=None)
+    s2.load_state(state)
+    assert len(s2.objects) == len(s.objects)
+    assert np.array_equal(s2.label_map(), s.label_map())
+    assert [o.label for o in s2.objects] == [o.label for o in s.objects]
+
+
+def test_cvat_export_roundtrip_through_dataset_parser(tmp_path):
+    from PIL import Image
+    from dmgseg.app.project import FolderProject, export_cvat
+    from dmgseg.data.cvat import parse_annotations, semantic_mask
+    Image.fromarray(np.zeros((60, 80, 3), np.uint8)).save(tmp_path / "a.png")
+    Image.fromarray(np.zeros((60, 80, 3), np.uint8)).save(tmp_path / "b.png")
+    proj = FolderProject(tmp_path)
+    s = _session_with_objects()
+    proj.save_state("a.png", s.to_state())
+    for shape in ("mask", "polygon"):
+        out = tmp_path / f"cvat_{shape}.xml"
+        assert export_cvat(proj, out, shape=shape) == 1
+        anns = parse_annotations(out)
+        assert [a.name for a in anns] == ["a.png"]
+        back = semantic_mask(anns[0])
+        if shape == "mask":
+            assert np.array_equal(back, s.label_map())          # exact, incl. the tree cut-out
+        else:
+            assert (back == s.label_map()).mean() > 0.95

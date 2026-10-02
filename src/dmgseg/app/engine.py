@@ -9,6 +9,7 @@ The class head never assigns "Other" (unlabeled pixels are Other), but the user 
 mark an object as Other (key 0, or the last step of right-click cycling); such
 objects are painted on top and erase the labels behind them.
 """
+import base64
 import copy
 import json
 from dataclasses import dataclass, field
@@ -82,6 +83,7 @@ class Session:
         self.objects: list[Obj] = []
         self.active: int | None = None
         self._undo: list = []
+        self.prelabeled = False          # the automatic draft was made (do not redo it)
         clicker.set_image(self.image)
         self.embed = clicker.image_embedding
 
@@ -90,7 +92,7 @@ class Session:
         """Called when the background prior is ready: classify pending objects."""
         self.prior = fit_prior(prior, self.h, self.w)
         for o in self.objects:
-            if o.pending or (o.manual is None and o.choice == 0):
+            if o.pending:
                 o.ranking = self._ranking(o)
                 o.pending = False
 
@@ -121,6 +123,7 @@ class Session:
             self.objects.append(o)
             n += 1
         self.active = None
+        self.prelabeled = True
         return n
 
     # -- actions -------------------------------------------------------------
@@ -198,6 +201,42 @@ class Session:
         del self.objects[index]
         self.active = None
 
+    # -- saving and loading ----------------------------------------------------
+    def to_state(self):
+        """Everything needed to continue later (masks stored as packed bits in their box)."""
+        objs = []
+        for o in self.objects:
+            ys, xs = np.nonzero(o.mask)
+            if len(ys) == 0:
+                continue
+            y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+            objs.append({
+                "box": [x0, y0, x1, y1],
+                "bits": base64.b64encode(np.packbits(o.mask[y0:y1, x0:x1]).tobytes()).decode("ascii"),
+                "ranking": list(map(int, o.ranking)), "choice": int(o.choice),
+                "manual": None if o.manual is None else int(o.manual), "sam_score": float(o.sam_score),
+                "cand_type": int(o.cand_type), "click_no": int(o.click_no),
+                "points": [[float(a), float(b)] for a, b in o.points], "labels": list(map(int, o.labels)),
+                "pending": bool(o.pending), "auto": bool(o.auto)})
+        return {"version": 1, "width": self.w, "height": self.h, "prelabeled": self.prelabeled, "objects": objs}
+
+    def load_state(self, state):
+        if (state["width"], state["height"]) != (self.w, self.h):
+            raise ValueError("saved annotation does not match the image size")
+        self.objects = []
+        for d in state["objects"]:
+            x0, y0, x1, y1 = d["box"]
+            mask = np.zeros((self.h, self.w), bool)
+            n = (y1 - y0) * (x1 - x0)
+            bits = np.frombuffer(base64.b64decode(d["bits"]), np.uint8)
+            mask[y0:y1, x0:x1] = np.unpackbits(bits)[:n].reshape(y1 - y0, x1 - x0).astype(bool)
+            self.objects.append(Obj(mask=mask, ranking=d["ranking"], choice=d["choice"], manual=d["manual"],
+                                    sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
+                                    points=[tuple(p) for p in d["points"]], labels=d["labels"],
+                                    logits=None, pending=d["pending"], auto=d["auto"]))
+        self.prelabeled = state.get("prelabeled", False)
+        self.active, self._undo = None, []
+
     # -- output --------------------------------------------------------------
     def label_map(self):
         """(H, W) class ids; objects painted in class-priority order (Other = 0)."""
@@ -255,6 +294,20 @@ class Session:
         Path(json_path).write_text(json.dumps({"image": source_name, "width": self.w, "height": self.h,
                                                "objects": objs}, indent=1))
         return png_path, json_path
+
+    def visible_objects(self):
+        """[(class id, visible mask)]: the part of each object that shows in the
+        label map. Disjoint across classes, so any paint order reproduces the label
+        map (needed for CVAT, where Other is painted below everything)."""
+        lm = self.label_map()
+        out = []
+        for o in self.objects:
+            if o.label is None:
+                continue
+            vis = o.mask & (lm == o.label)
+            if vis.any():
+                out.append((o.label, vis))
+        return out
 
     def overlay(self, alpha=0.45, active_outline=True):
         """RGB image with the class colors blended in (for display and tests)."""

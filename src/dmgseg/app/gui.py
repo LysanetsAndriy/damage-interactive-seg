@@ -1,6 +1,12 @@
 """Damage Annotator: a classic-Windows-style desktop app for click annotation.
 
-    python -m dmgseg.app
+    python -m dmgseg.app                    # then File > Open Folder (or Open Image)
+    python -m dmgseg.app path/to/folder     # open a folder directly
+
+Folder mode: work is saved automatically to <folder>/_damage_annotator/ (also on
+switching images and on quitting); priors are pre-computed in the background for
+the next images; Page Up / Page Down = previous / next image; File > Export CVAT XML
+writes the whole folder in CVAT for images 1.1 format.
 
 Mouse (on the image):
     left click            new object (SAM mask; class and mask chosen by the class head)
@@ -13,6 +19,7 @@ front of the building: it is cut out of what is behind), Delete/Backspace remove
 it, Ctrl+Z undo.
 """
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +28,7 @@ from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from dmgseg.app.engine import COLORS, ClassHead, Session
+from dmgseg.app.project import FolderProject, export_cvat
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE
 
@@ -127,6 +135,63 @@ class Models:
         return probs
 
 
+class PriorPrefetcher:
+    """One background thread that computes and caches priors for a folder: the
+    current image first, then the following images that have no cached prior yet.
+    Callbacks run in this thread; the window forwards them to the GUI thread."""
+
+    def __init__(self, models, project, on_done, on_progress):
+        self.models, self.project = models, project
+        self.on_done, self.on_progress = on_done, on_progress
+        self.current = None
+        self.failed = set()
+        self.cv = threading.Condition()
+        self.stopped = False
+        self.thread = threading.Thread(target=self._loop, name="prior_prefetch", daemon=True)
+        self.thread.start()
+
+    def set_current(self, name):
+        with self.cv:
+            self.current = name
+            self.cv.notify()
+
+    def stop(self):
+        with self.cv:
+            self.stopped = True
+            self.cv.notify()
+
+    def pending(self):
+        return sum(1 for n in self.project.images if not self.project.has_prior(n) and n not in self.failed)
+
+    def _next(self):
+        todo = lambda n: not self.project.has_prior(n) and n not in self.failed
+        if self.current and todo(self.current):
+            return self.current
+        imgs = self.project.images
+        start = imgs.index(self.current) if self.current in imgs else 0
+        return next((n for n in imgs[start:] + imgs[:start] if todo(n)), None)
+
+    def _loop(self):
+        while True:
+            with self.cv:
+                if self.stopped:
+                    return
+                name = self._next()
+                if name is None:
+                    self.cv.wait(5)
+                    continue
+            try:
+                image = np.asarray(Image.open(self.project.path(name)).convert("RGB"))
+                probs = self.models.compute_prior(image, progress=lambda d, t, n=name: self.on_progress(n, d, t))
+                self.project.save_prior(name, probs)
+                self.on_done(name, probs)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                self.failed.add(name)
+                self.on_done(name, None)
+
+
 # ----------------------------------------------------------------- canvas
 class Canvas(QtWidgets.QGraphicsView):
     clicked = QtCore.Signal(int, int, object, object)   # x, y, button, modifiers
@@ -210,6 +275,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alpha = 0.45
         self.show_prior = False
         self._threads = []
+        self.project = None              # FolderProject when a folder is open
+        self.current_name = None         # image name inside the project
+        self.prefetcher = None
+        self._save_timer = QtCore.QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.save_current)
 
         self.canvas = Canvas()
         self.canvas.clicked.connect(self.on_click)
@@ -220,10 +291,11 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
         split = QtWidgets.QSplitter()
+        split.addWidget(self._images_panel())
         split.addWidget(self.canvas)
         split.addWidget(self._side_panel())
-        split.setStretchFactor(0, 1)
-        split.setSizes([1000, 260])
+        split.setStretchFactor(1, 1)
+        split.setSizes([200, 900, 260])
         lay.addWidget(split, 1)
         self.setCentralWidget(central)
 
@@ -240,6 +312,21 @@ class MainWindow(QtWidgets.QMainWindow):
                         progress=lambda d, t: self.progress.setValue(int(100 * d / t)))
 
     # -- layout pieces ---------------------------------------------------------
+    def _images_panel(self):
+        box = QtWidgets.QGroupBox("Images")
+        v = QtWidgets.QVBoxLayout(box)
+        self.image_list = QtWidgets.QListWidget()
+        self.image_list.itemActivated.connect(lambda it: self.goto(it.data(QtCore.Qt.UserRole)))
+        self.image_list.itemClicked.connect(lambda it: self.goto(it.data(QtCore.Qt.UserRole)))
+        v.addWidget(self.image_list)
+        legend = QtWidgets.QLabel("✓ n: annotated (n objects)\n•  prior ready\n   not started")
+        legend.setFrameShape(QtWidgets.QFrame.Panel)
+        legend.setFrameShadow(QtWidgets.QFrame.Sunken)
+        v.addWidget(legend)
+        box.setVisible(False)
+        self.images_box = box
+        return box
+
     def _side_panel(self):
         side = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(side)
@@ -279,7 +366,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setMenuWidget(top)
         f = mb.addMenu("&File")
         self.act_open = f.addAction("&Open Image...", self.open_dialog, QtGui.QKeySequence.Open)
-        self.act_save = f.addAction("&Export Mask...", self.export_dialog, QtGui.QKeySequence.Save)
+        f.addAction("Open &Folder...", self.open_folder_dialog, "Ctrl+Shift+O")
+        f.addSeparator()
+        f.addAction("&Save", self.save_current, QtGui.QKeySequence.Save)
+        f.addAction("&Export Mask...", self.export_dialog, "Ctrl+E")
+        f.addAction("Export &CVAT XML (folder)...", self.export_cvat_dialog, "Ctrl+Shift+E")
+        f.addSeparator()
+        f.addAction("&Previous Image", lambda: self.step(-1), QtGui.QKeySequence(QtCore.Qt.Key_PageUp))
+        f.addAction("&Next Image", lambda: self.step(1), QtGui.QKeySequence(QtCore.Qt.Key_PageDown))
         f.addSeparator()
         f.addAction("E&xit", self.close, QtGui.QKeySequence.Quit)
         e = mb.addMenu("&Edit")
@@ -303,8 +397,13 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.setMovable(False)
         tb.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
         st = self.style()
+        tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DirOpenIcon), "Folder", self.open_folder_dialog)
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton), "Open", self.open_dialog)
-        tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogSaveButton), "Export", self.export_dialog)
+        tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogSaveButton), "Save", self.save_current)
+        tb.addSeparator()
+        tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_MediaSeekBackward), "Prev", lambda: self.step(-1))
+        tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_MediaSeekForward), "Next", lambda: self.step(1))
+        tb.addSeparator()
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_ArrowBack), "Undo", self.undo)
         tb.addSeparator()
         tb.addWidget(QtWidgets.QLabel(" Color strength: "))
@@ -373,42 +472,164 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             self.open_image(path)
 
+    def open_folder_dialog(self):
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open Folder of Images")
+        if path:
+            self.open_folder(path)
+
+    def open_folder(self, path):
+        if not self.ready():
+            self.status("Models are still loading, please wait...")
+            QtCore.QTimer.singleShot(500, lambda: self.open_folder(path))
+            return
+        self.save_current()
+        self.project = FolderProject(path)
+        if not self.project.images:
+            self.status(f"No images in {path}")
+            self.project = None
+            return
+        if self.prefetcher:
+            self.prefetcher.stop()
+        self.prefetcher = PriorPrefetcher(
+            self.models, self.project,
+            on_done=lambda n, p: self._ui.emit(self._prefetch_done, (n, p)),
+            on_progress=lambda n, d, t: self._ui.emit(self._prefetch_progress, (n, d, t)))
+        self.images_box.setVisible(True)
+        self._fill_image_list()
+        first = next((n for n in self.project.images if self.project.n_objects(n) == 0), self.project.images[0])
+        self.goto(first)
+
+    def goto(self, name):
+        if self.project is not None and name in self.project.images and name != self.current_name:
+            self.open_image(str(self.project.path(name)))
+
+    def step(self, delta):
+        if self.project is None or self.current_name is None:
+            return
+        imgs = self.project.images
+        i = imgs.index(self.current_name) + delta
+        if 0 <= i < len(imgs):
+            self.goto(imgs[i])
+
     def open_image(self, path):
         if not self.ready():
             self.status("Models are still loading, please wait...")
             return
-        self.image_path = Path(path)
+        self.save_current()
+        path = Path(path)
+        in_project = self.project is not None and path.parent == self.project.folder
+        name = path.name if in_project else None
+        self.current_name = name
+        self.image_path = path
+        self.session = None
         image = np.asarray(Image.open(path).convert("RGB"))
-        self.status(f"Reading image with SAM: {self.image_path.name}")
-        self.caption.setText(f"  {TITLE} - {self.image_path.name}")
+        self.status(f"Reading image with SAM: {path.name}")
+        self.caption.setText(f"  {TITLE} - {path.name}")
         self.canvas.show_rgb(image, fit=True)
+        self.progress.setValue(0)
+        if in_project:
+            self._mark_current()
 
         def make_session(progress=None):
             return Session(image, self.models.clicker, self.models.head)
 
         def got_session(session):
+            if self.image_path != path:          # the user moved on meanwhile
+                return
+            state = self.project.load_state(name) if name else None
+            if state:
+                session.load_state(state)
             self.session = session
-            self.status("Ready: click objects (the class appears when the prior is done)")
-            self.prior_label.setText(" Prior: running ")
-            self.refresh()
-            t0 = time.time()
-            self.run_bg(self.models.compute_prior, image,
-                        on_done=lambda p: self.got_prior(p, time.time() - t0),
-                        progress=lambda d, t: self.progress.setValue(int(100 * d / t)))
+            restored = f"restored {len(session.objects)} objects; " if state else ""
+            self.refresh(save=False)
+            if name and self.project.has_prior(name):
+                self.got_prior(self.project.load_prior(name), cached=True)
+            elif name:
+                self.prior_label.setText(" Prior: computing ")
+                self.status(restored + "click objects (classes appear when the prior is done)")
+                self.prefetcher.set_current(name)
+            else:
+                self.prior_label.setText(" Prior: computing ")
+                self.status("Ready: click objects (the class appears when the prior is done)")
+                t0 = time.time()
+                self.run_bg(self.models.compute_prior, image,
+                            on_done=lambda p: self.got_prior(p, seconds=time.time() - t0) if self.image_path == path else None,
+                            progress=lambda d, t: self.progress.setValue(int(100 * d / t)))
 
-        self.progress.setValue(0)
         self.run_bg(make_session, on_done=got_session)
 
-    def got_prior(self, prior, seconds):
-        if self.session is None:
+    def got_prior(self, prior, seconds=None, cached=False):
+        if self.session is None or self.session.prior is not None:
             return
         self.session.set_prior(prior)
-        self.prior_label.setText(f" Prior: done ({seconds:.0f} s) ")
+        self.prior_label.setText(" Prior: cached " if cached else f" Prior: done ({seconds:.0f} s) " if seconds else " Prior: done ")
         self.progress.setValue(100)
-        self.status("Prior ready: classes assigned")
+        self.status("Prior ready")
         self.refresh()
-        if self.auto_check.isChecked() and not any(o.auto for o in self.session.objects):
+        if self.auto_check.isChecked() and not self.session.prelabeled:
             self.run_prelabel()
+
+    # -- folder: background priors, saving, list -------------------------------------
+    def _prefetch_done(self, name, probs):
+        self._update_image_item(name)
+        if probs is not None and name == self.current_name and self.session is not None:
+            self.got_prior(probs)
+        left = self.prefetcher.pending() if self.prefetcher else 0
+        if name != self.current_name:
+            self.prior_label.setText(f" Priors to pre-compute: {left} " if left else " All priors ready ")
+
+    def _prefetch_progress(self, name, done, total):
+        if name == self.current_name:
+            self.progress.setValue(int(100 * done / total))
+
+    def save_current(self):
+        if self.project is None or self.current_name is None or self.session is None:
+            return
+        self.project.save_state(self.current_name, self.session.to_state())
+        self._update_image_item(self.current_name)
+
+    def _item_text(self, name):
+        n = self.project.n_objects(name)
+        mark = f"✓{n:>3}" if n else (" •  " if self.project.has_prior(name) else "    ")
+        return f"{mark}  {name}"
+
+    def _fill_image_list(self):
+        self.image_list.clear()
+        for name in self.project.images:
+            it = QtWidgets.QListWidgetItem(self._item_text(name))
+            it.setData(QtCore.Qt.UserRole, name)
+            self.image_list.addItem(it)
+
+    def _update_image_item(self, name):
+        if self.project is None or name not in self.project.images:
+            return
+        self.image_list.item(self.project.images.index(name)).setText(self._item_text(name))
+
+    def _mark_current(self):
+        self.image_list.blockSignals(True)
+        self.image_list.setCurrentRow(self.project.images.index(self.current_name))
+        self.image_list.blockSignals(False)
+
+    def export_cvat_dialog(self):
+        if self.project is None:
+            self.status("Open a folder first (File > Open Folder)")
+            return
+        self.save_current()
+        kind, ok = QtWidgets.QInputDialog.getItem(
+            self, "Export CVAT XML", "Shapes:", ["Masks (exact, CVAT 2.x)", "Polygons (outlines)"], 0, False)
+        if not ok:
+            return
+        default = str(self.project.folder / "annotations_cvat.xml")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export CVAT XML", default, "XML (*.xml)")
+        if path:
+            n = export_cvat(self.project, path, shape="mask" if kind.startswith("Masks") else "polygon")
+            self.status(f"CVAT XML with {n} annotated images saved to {Path(path).name}")
+
+    def closeEvent(self, e):
+        self.save_current()
+        if self.prefetcher:
+            self.prefetcher.stop()
+        super().closeEvent(e)
 
     def run_prelabel(self):
         s = self.session
@@ -513,7 +734,9 @@ class MainWindow(QtWidgets.QMainWindow):
             rgb = s.overlay(alpha=self.alpha)
         self.canvas.show_rgb(rgb)
 
-    def refresh(self):
+    def refresh(self, save=True):
+        if save and self.project is not None and self.session is not None:
+            self._save_timer.start(1500)      # auto-save shortly after each change
         s = self.session
         self.class_list.clear()
         counts = s.counts() if s else {c: 0 for c in list(CLICKABLE) + [0]}
@@ -549,7 +772,7 @@ def main(argv=None):
 
 def _open_when_ready(win, path):
     if win.ready():
-        win.open_image(path)
+        (win.open_folder if Path(path).is_dir() else win.open_image)(path)
     else:
         QtCore.QTimer.singleShot(500, lambda: _open_when_ready(win, path))
 
