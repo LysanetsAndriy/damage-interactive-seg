@@ -44,13 +44,18 @@ def miou(cm):
         return np.nanmean(tp / (cm.sum(0) + cm.sum(1) - tp))
 
 
-def largest_error(pred, gt):
-    """Deepest point (x, y) of the largest connected wrong region, or None."""
+def largest_error(pred, gt, skip=()):
+    """Deepest point (x, y) of the largest connected wrong region that does not
+    contain an already-tried point, or None."""
     err = (pred != gt).astype(np.uint8)
     if not err.any():
         return None
     n, comp, stats, _ = cv2.connectedComponentsWithStats(err, connectivity=8)
-    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    tried = {int(comp[y, x]) for x, y in skip}
+    order = [i for i in (1 + np.argsort(-stats[1:, cv2.CC_STAT_AREA])) if int(i) not in tried]
+    if not order:
+        return None
+    i = int(order[0])
     x0, y0, w, h = (stats[i, k] for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
     region = comp[y0:y0 + h, x0:x0 + w] == i
     dt = ndimage.distance_transform_edt(np.pad(region, 1))[1:-1, 1:-1]
@@ -84,17 +89,33 @@ def act(session, gt, x, y):
     return "shrink"
 
 
-def simulate(session, gt, budget, start):
+def simulate(session, gt, budget, start, undo_worse=True):
+    """undo_worse: like a person, undo an action that made the image worse (fewer
+    correct pixels); the undo costs one more interaction and the spot is not
+    tried again."""
     if start == "prelabel":
         session.prelabel()
-    cms, actions = [confusion(session.label_map(), gt)], []
-    for _ in range(budget):
-        pt = largest_error(session.label_map(), gt)
+    lm = session.label_map()
+    cms, actions, tried = [confusion(lm, gt)], [], []
+    correct = int((lm == gt).sum())
+    while len(actions) < budget:
+        pt = largest_error(lm, gt, tried)
         if pt is None:
             cms.append(cms[-1]); actions.append("none")
             continue
-        actions.append(act(session, gt, *pt))
-        cms.append(confusion(session.label_map(), gt))
+        a = act(session, gt, *pt)
+        lm = session.label_map()
+        new_correct = int((lm == gt).sum())
+        if undo_worse and new_correct < correct:
+            cms.append(confusion(lm, gt)); actions.append(a + " (worse)")
+            tried.append(pt)
+            if len(actions) < budget:
+                session.undo()
+                lm = session.label_map()
+                cms.append(confusion(lm, gt)); actions.append("undo")
+            continue
+        correct = new_correct
+        cms.append(confusion(lm, gt)); actions.append(a)
     return np.stack(cms), actions
 
 
@@ -107,6 +128,7 @@ def main():
     ap.add_argument("--max-images", type=int)
     ap.add_argument("--sam-weights", type=Path, help="fine-tuned SAM decoder (sam/finetuned_decoder.pt)")
     ap.add_argument("--head", type=Path, default=paths.ARTIFACTS / "classhead" / "head_a.pt")
+    ap.add_argument("--no-undo", action="store_true", help="keep actions that make the image worse")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 
@@ -120,7 +142,7 @@ def main():
         gt = semantic_mask(anns[name])
         s = Session(image, clicker, head)
         s.set_prior(load_prior(paths.ARTIFACTS / "priors" / paths.PRIOR_RUN / f"{name}.npz"))
-        cms, actions = simulate(s, gt, args.budget, args.start)
+        cms, actions = simulate(s, gt, args.budget, args.start, undo_worse=not args.no_undo)
         total = cms if total is None else total + cms
         per_image[name] = [round(float(miou(c)), 4) for c in cms]
         action_log[name] = actions
