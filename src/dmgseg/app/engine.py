@@ -22,6 +22,7 @@ from dmgseg.classhead.features import CARD_SIZE, REFINED, card
 from dmgseg.classhead.mlp import CardHead, predict
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE, class_ranking, fit_prior
+from dmgseg.tool.prelabel import prelabel as _prelabel
 
 OTHER = 0
 # Paint lower-priority classes first, like the dataset. Objects the user marks as
@@ -46,6 +47,7 @@ class Obj:
     labels: list = field(default_factory=list)
     logits: np.ndarray | None = None
     pending: bool = False             # class not yet known (prior still running)
+    auto: bool = False                # created by the automatic pre-label
 
     @property
     def label(self):
@@ -99,6 +101,27 @@ class Session:
             return class_ranking(self.prior, o.mask) + CYCLE_END
         probs, _ = self.head.score([card(o.mask, self.prior, self.embed, o.sam_score, o.cand_type, o.click_no)])
         return [CLICKABLE[i] for i in np.argsort(-probs[0])] + CYCLE_END
+
+    # -- automatic first draft ------------------------------------------------
+    def prelabel(self, use_head=False, **kw):
+        """Add objects for the prior's blobs, snapped to shapes by SAM. Returns how many.
+        The class comes from the blob (head A was trained on click masks and is worse
+        on these); use_head=True switches to head A."""
+        if self.prior is None:
+            return 0
+        self._snapshot()
+        n = 0
+        for p in _prelabel(self.prior, self.clicker, **kw):
+            o = Obj(mask=p.mask, ranking=[], sam_score=p.sam_score, cand_type=REFINED, click_no=1,
+                    points=p.points, labels=p.labels, logits=p.logits, auto=True)
+            if use_head and self.head is not None:
+                o.ranking = self._ranking(o)
+            else:
+                o.ranking = [p.prior_class] + [c for c in CLICKABLE if c != p.prior_class] + CYCLE_END
+            self.objects.append(o)
+            n += 1
+        self.active = None
+        return n
 
     # -- actions -------------------------------------------------------------
     def _snapshot(self):

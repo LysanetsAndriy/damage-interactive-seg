@@ -283,6 +283,8 @@ class MainWindow(QtWidgets.QMainWindow):
         vmenu.addAction("Fit to &Window", lambda: self.canvas.fitInView(self.canvas.item, QtCore.Qt.KeepAspectRatio), "F")
         self.act_prior = vmenu.addAction("Show &Prior Map", self.toggle_prior, "P")
         self.act_prior.setCheckable(True)
+        t = mb.addMenu("&Tools")
+        t.addAction("&Auto Pre-label", self.run_prelabel, "Ctrl+L")
         h = mb.addMenu("&Help")
         h.addAction("&Shortcuts", lambda: QtWidgets.QMessageBox.information(self, "Shortcuts", __doc__.split("Mouse")[1]))
         h.addAction("&About", lambda: QtWidgets.QMessageBox.about(
@@ -308,6 +310,11 @@ class MainWindow(QtWidgets.QMainWindow):
         s.valueChanged.connect(lambda v: (setattr(self, "alpha", v / 100), pct.setText(f" {v} % "), self.redraw()))
         tb.addWidget(s)
         tb.addWidget(pct)
+        tb.addSeparator()
+        self.auto_check = QtWidgets.QCheckBox("Auto pre-label")
+        self.auto_check.setChecked(True)
+        self.auto_check.setToolTip("When the prior is ready, draft all objects automatically (Tools > Auto Pre-label)")
+        tb.addWidget(self.auto_check)
         tb.addSeparator()
         cb = QtWidgets.QCheckBox("Prior map")
         cb.toggled.connect(lambda on: (self.act_prior.setChecked(on), self.toggle_prior()))
@@ -391,6 +398,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prior_label.setText(f" Prior: done ({seconds:.0f} s) ")
         self.progress.setValue(100)
         self.status("Prior ready: classes assigned")
+        self.refresh()
+        if self.auto_check.isChecked() and not any(o.auto for o in self.session.objects):
+            self.run_prelabel()
+
+    def run_prelabel(self):
+        s = self.session
+        if s is None or s.prior is None:
+            self.status("Pre-label needs the prior: wait for 'Prior: done'")
+            return
+        self.status("Auto pre-label: snapping the prior's regions with SAM...")
+        QtWidgets.QApplication.processEvents()
+        t0 = time.time()
+        n = s.prelabel()
+        self.status(f"Auto pre-label: {n} objects in {time.time() - t0:.0f} s. Correct with clicks; Ctrl+Z removes the draft")
         self.refresh()
 
     # -- interaction -------------------------------------------------------------
@@ -496,7 +517,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if s:
             for i, o in enumerate(s.objects):
                 name = "(pending)" if o.pending else CLASS_NAMES[o.label]
-                flag = " *" if o.manual is not None else ""
+                flag = (" *" if o.manual is not None else "") + (" (auto)" if o.auto else "")
                 it = QtWidgets.QListWidgetItem(swatch(o.label if o.label is not None else 0),
                                                f"#{i + 1}  {name}{flag}  ({int(o.mask.sum())} px)")
                 self.object_list.addItem(it)
