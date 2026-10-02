@@ -601,5 +601,39 @@ def _(WORKDIR, i_refresh, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## J. Class-head cards with the fine-tuned SAM (~1.5 h)
+
+    The same cards as in F, but the masks come from the fine-tuned SAM decoder
+    (section I): `classhead/cards_{train,val}_samft.npz`. Head A is then retrained
+    on them (on the Mac).
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    j_button = mo.ui.run_button(label="Build cards with fine-tuned SAM (~1.5 h)")
+    j_button
+    return (j_button,)
+
+
+@app.cell
+def _(DEVICE, WORKDIR, j_button, mo):
+    mo.stop(not j_button.value)
+
+    from dmgseg.classhead.run_build import cards_job as _j_cards
+    from dmgseg.prior.experiments import start_in_background as _j_start, status_writer as _j_status
+    from dmgseg.sam.install import ensure_sam2 as _j_sam2
+
+    _j_sam2()
+    j_message = _j_start("j_queue", WORKDIR, DEVICE, target=_j_cards, status=_j_status(WORKDIR, "j_queue"),
+                         sam_weights="sam/finetuned_decoder.pt", suffix="_samft", wait_for="i_queue")
+    mo.md(f"**{j_message}**")
+    return
+
+
 if __name__ == "__main__":
     app.run()

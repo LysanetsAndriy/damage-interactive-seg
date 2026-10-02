@@ -34,6 +34,7 @@ def subset(cards, images):
 
 
 def fetch(name, local_dir=paths.ARTIFACTS):
+    """name: "train", "val", or with a suffix such as "train_samft"."""
     path = Path(local_dir) / f"classhead/cards_{name}.npz"
     if not path.exists():
         hub.download_if_exists(f"classhead/cards_{name}.npz", local_dir)
@@ -55,9 +56,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=paths.ARTIFACTS / "classhead" / "head_a.pt")
     ap.add_argument("--seeds", type=int, default=3, help="train several seeds, report mean ± std")
+    ap.add_argument("--cards", default="", help='card set suffix, e.g. "_samft" (fine-tuned SAM masks)')
     args = ap.parse_args()
 
-    train_all, val = fetch("train"), fetch("val")
+    train_all, val = fetch("train" + args.cards), fetch("val" + args.cards)
     dev_images = set(load_kfold()[0]["heldout"])
     train_images = set(train_all["obj_image"]) - dev_images
     train, dev = subset(train_all, train_images), subset(train_all, dev_images)

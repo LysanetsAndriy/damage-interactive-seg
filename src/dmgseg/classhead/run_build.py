@@ -13,9 +13,14 @@ from dmgseg.classhead.build import build_cards, save_cards
 from dmgseg.data.split import load_split
 
 
-def cards_job(workdir, device, status=None):
+def cards_job(workdir, device, status=None, sam_weights=None, suffix=""):
+    """sam_weights: fine-tuned SAM decoder (path, or a Hub path like
+    "sam/finetuned_decoder.pt"); suffix names the outputs, e.g. "_samft" ->
+    classhead/cards_train_samft.npz."""
     status = status or (lambda **_: None)
     workdir = Path(workdir)
+    if sam_weights and not Path(sam_weights).exists():
+        sam_weights = hub.download_if_exists(str(sam_weights), workdir)
     try:
         split = load_split()
         status(state="downloading priors")
@@ -23,13 +28,13 @@ def cards_job(workdir, device, status=None):
                           allow_patterns=[f"priors/oof_{paths.PRIOR_RUN}/*.npz"]
                           + [f"priors/{paths.PRIOR_RUN}/{n}.npz" for n in split["val"]])
         from dmgseg.sam.predictor import SamClicker
-        clicker = SamClicker("small", device)
+        clicker = SamClicker("small", device, decoder_weights=sam_weights)
         jobs = {
             "train": (split["train"], workdir / "priors" / f"oof_{paths.PRIOR_RUN}", True),
             "val": (split["val"], workdir / "priors" / paths.PRIOR_RUN, False),
         }
         for name, (names, prior_dir, jitter) in jobs.items():
-            target = f"classhead/cards_{name}.npz"
+            target = f"classhead/cards_{name}{suffix}.npz"
             if HfApi().file_exists(paths.HF_REPO, target, repo_type="dataset"):
                 continue
             status(state="building", stage=f"{name} ({len(names)} images)")
