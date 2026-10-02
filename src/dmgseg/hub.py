@@ -8,12 +8,13 @@ from huggingface_hub.errors import EntryNotFoundError
 from dmgseg import paths
 
 
-def download_data(repo=paths.HF_REPO, local_dir=None):
-    """Download images, annotations and weights; point dmgseg.paths at them.
+DATA_PATTERNS = ["Dataset_CVAT/*", "Dataset_CVAT/**", "weights/*"]
 
-    Call this before importing anything that reads dmgseg.paths at import time.
-    """
-    root = snapshot_download(repo, repo_type="dataset", local_dir=local_dir)
+
+def download_data(repo=paths.HF_REPO, local_dir=None, allow_patterns=DATA_PATTERNS):
+    """Download images, annotations and the paper weights (not the run checkpoints,
+    tens of GB); point dmgseg.paths at them."""
+    root = snapshot_download(repo, repo_type="dataset", local_dir=local_dir, allow_patterns=allow_patterns)
     os.environ["DMGSEG_DATA"] = root
     _refresh_paths()
     return Path(root)

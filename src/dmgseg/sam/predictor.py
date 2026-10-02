@@ -35,6 +35,11 @@ class SamClicker:
             self.predictor.set_image(np.asarray(image_rgb))
         self.reset_object()
 
+    @property
+    def image_embedding(self):
+        """SAM 2 image embedding of the current image: tensor (256, 64, 64)."""
+        return self.predictor._features["image_embed"][0]
+
     def reset_object(self):
         self.points, self.labels, self.logits = [], [], None
         self.candidates = None  # first-click masks, scores
@@ -51,12 +56,21 @@ class SamClicker:
                 multimask_output=first,
             )
         if first:
+            self.first_logits = logits
             self.candidates = (masks.astype(bool), scores)
             k = self._pick(masks.astype(bool), scores)
         else:
             k = 0
         self.logits = logits[k]
+        self.last_score = float(scores[k])
         return masks[k].astype(bool)
+
+    def choose_index(self, k):
+        """After the first click: continue from candidate k instead of the picked one."""
+        masks, scores = self.candidates
+        self.logits = self.first_logits[k]
+        self.last_score = float(scores[k])
+        return masks[k]
 
     def _pick(self, masks, scores):
         if callable(self.choose):

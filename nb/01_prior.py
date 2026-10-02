@@ -351,5 +351,64 @@ def _(WORKDIR, b2_refresh, mo, torch):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## F. Class head: description cards (~20-30 min)
+
+    The simulated user clicks every object; SAM gives 3 candidate masks per first
+    click (+ refined masks after clicks 2-3). Each mask becomes a 288-number card
+    (prior inside/around the mask, SAM appearance, geometry, SAM score).
+
+    - **train**: 246 training images, out-of-fold priors, extra random first clicks
+    - **val**: 44 validation images, B2b priors
+
+    Result: `classhead/cards_{train,val}.npz` on Hugging Face (the head trains on the Mac).
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    f_button = mo.ui.run_button(label="Build class-head cards (~30 min)")
+    f_button
+    return (f_button,)
+
+
+@app.cell
+def _(DEVICE, WORKDIR, f_button, mo):
+    mo.stop(not f_button.value)
+
+    from dmgseg.sam.install import ensure_sam2
+    from dmgseg.classhead.run_build import cards_job
+    from dmgseg.prior.experiments import start_in_background as _f_start, status_writer as _f_status
+
+    print("SAM 2:", ensure_sam2())
+    f_message = _f_start("f_queue", WORKDIR, DEVICE, target=cards_job, status=_f_status(WORKDIR, "f_queue"))
+    mo.md(f"**{f_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    f_refresh = mo.ui.refresh(options=["30s", "1m"], default_interval="30s", label="Auto-refresh")
+    f_refresh
+    return (f_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, f_refresh, mo):
+    f_refresh
+
+    import json as _fjson
+
+    _p = WORKDIR / "runs" / "f_queue" / "status.json"
+    _fst = _fjson.loads(_p.read_text()) if _p.exists() else {}
+    mo.md(f"**state:** {_fst.get('state', '-')} · **stage:** {_fst.get('stage', '-')} · "
+          f"**updated:** {_fst.get('updated', '-')}"
+          + (f"\n\n```\n{_fst['error'][-1500:]}\n```" if _fst.get("error") else ""))
+    return
+
+
 if __name__ == "__main__":
     app.run()
