@@ -629,8 +629,8 @@ def _(DEVICE, WORKDIR, j_button, mo):
     from dmgseg.sam.install import ensure_sam2 as _j_sam2
 
     _j_sam2()
-    j_message = _j_start("j_queue", WORKDIR, DEVICE, target=_j_cards, status=_j_status(WORKDIR, "j_queue"),
-                         sam_weights="sam/finetuned_decoder.pt", suffix="_samft", wait_for="i_queue")
+    j_message = _j_start("j2_queue", WORKDIR, DEVICE, target=_j_cards, status=_j_status(WORKDIR, "j2_queue"),
+                         sam_weights="sam/finetuned_decoder.pt", suffix="_samft")
     mo.md(f"**{j_message}**")
     return
 
