@@ -101,27 +101,38 @@ def _rank_of(probs, label_idx):
 
 
 def evaluate_cards(model, cards, class_names=None):
-    """Per object: first-click mask IoU (SAM score / head quality / oracle) and class
-    rank (prior baseline vs head) on the chosen first mask and on the last refined mask."""
-    from dmgseg.data.cvat import CLASS_NAMES
+    """Head A on cards (or only the rules if model is None); see evaluate_predictions."""
     probs, qual = predict(model, cards["X"]) if model is not None else (None, None)
-    base = prior_ranking_probs(cards["X"])
+    meta = {k: cards[k] for k in ("obj", "click", "cand", "label", "iou")}
+    meta["sam_score"] = cards["X"][:, SAM_SCORE_COL]
+    meta["prior_mean"] = prior_ranking_probs(cards["X"])
+    return evaluate_predictions(meta, probs, qual)
+
+
+def evaluate_predictions(meta, probs=None, qual=None):
+    """Per object: first-click mask IoU (SAM score / predicted quality / oracle) and
+    class rank (prior average vs the model's class probabilities) on the chosen
+    first mask and on the last refined mask.
+
+    meta: arrays per candidate -- obj, click, cand, label, iou, sam_score,
+    prior_mean (N, 5 clickable classes). probs (N, 5) / qual (N,) from any model."""
+    from dmgseg.data.cvat import CLASS_NAMES
     rows = []
-    for oid in np.unique(cards["obj"]):
-        idx = np.where(cards["obj"] == oid)[0]
-        first = idx[(cards["click"][idx] == 1)][:3]           # the standard (center) click
-        refined = idx[cards["cand"][idx] == 3]
-        last = refined[np.argmax(cards["click"][refined])] if len(refined) else first[0]
-        label_idx = TO_HEAD[int(cards["label"][idx[0]])]
-        sam_pick = first[np.argmax(cards["X"][first, SAM_SCORE_COL])]
-        r = {"label": CLASS_NAMES[int(cards["label"][idx[0]])],
-             "sam/iou1": float(cards["iou"][sam_pick]),
-             "oracle/iou1": float(cards["iou"][first].max()),
-             "prior/rank@refined": int(_rank_of(base[[last]], [label_idx])[0]),
-             "prior/rank@first": int(_rank_of(base[[sam_pick]], [label_idx])[0])}
-        if model is not None:
+    for oid in np.unique(meta["obj"]):
+        idx = np.where(meta["obj"] == oid)[0]
+        first = idx[meta["click"][idx] == 1][:3]           # the standard first click
+        refined = idx[meta["cand"][idx] == 3]
+        last = refined[np.argmax(meta["click"][refined])] if len(refined) else first[0]
+        label_idx = TO_HEAD[int(meta["label"][idx[0]])]
+        sam_pick = first[np.argmax(meta["sam_score"][first])]
+        r = {"label": CLASS_NAMES[int(meta["label"][idx[0]])],
+             "sam/iou1": float(meta["iou"][sam_pick]),
+             "oracle/iou1": float(meta["iou"][first].max()),
+             "prior/rank@refined": int(_rank_of(meta["prior_mean"][[last]], [label_idx])[0]),
+             "prior/rank@first": int(_rank_of(meta["prior_mean"][[sam_pick]], [label_idx])[0])}
+        if probs is not None:
             head_pick = first[np.argmax(qual[first])]
-            r["head/iou1"] = float(cards["iou"][head_pick])
+            r["head/iou1"] = float(meta["iou"][head_pick])
             r["head/rank@refined"] = int(_rank_of(probs[[last]], [label_idx])[0])
             r["head/rank@first"] = int(_rank_of(probs[[head_pick]], [label_idx])[0])
         rows.append(r)

@@ -490,5 +490,61 @@ def _(WORKDIR, g_refresh, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## H. Class head B: fusion of DINOv2 + SAM feature maps (~1.5 h, waits for G)
+
+    Feature-map crops (frozen original DINOv2 -> PCA 256, SAM 256, prior 6, candidate
+    mask) on a 16x16 grid around each click; a small conv network predicts the class
+    and the mask quality. Variants: full / no DINOv2 / no SAM, 3 seeds each; evaluated
+    with center and random first clicks. Results: `classhead/head_b_results.json`.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    h_button = mo.ui.run_button(label="Queue class head B (starts after G)")
+    h_button
+    return (h_button,)
+
+
+@app.cell
+def _(DEVICE, WORKDIR, h_button, mo):
+    mo.stop(not h_button.value)
+
+    from dmgseg.sam.install import ensure_sam2 as _h_sam2
+    from dmgseg.classhead.run_h import h_job
+    from dmgseg.prior.experiments import start_in_background as _h_start, status_writer as _h_status
+
+    _h_sam2()
+    h_message = _h_start("h_queue", WORKDIR, DEVICE, target=h_job, status=_h_status(WORKDIR, "h_queue"),
+                         wait_for="g_queue")
+    mo.md(f"**{h_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    h_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="1m", label="Auto-refresh")
+    h_refresh
+    return (h_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, h_refresh, mo):
+    h_refresh
+
+    import json as _hjson
+
+    _p = WORKDIR / "runs" / "h_queue" / "status.json"
+    _hst = _hjson.loads(_p.read_text()) if _p.exists() else {}
+    mo.md(f"**state:** {_hst.get('state', '-')} · **stage:** {_hst.get('stage', '-')} · **updated:** {_hst.get('updated', '-')}"
+          + (f"\n\n{_hst['table']}" if _hst.get("table") else "")
+          + (f"\n\n```\n{_hst['error'][-1500:]}\n```" if _hst.get("error") else ""))
+    return
+
+
 if __name__ == "__main__":
     app.run()

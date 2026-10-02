@@ -26,17 +26,21 @@ from dmgseg.tool.assign import CLICKABLE, fit_prior
 from dmgseg.classhead.features import REFINED, card
 
 
-def _random_interior_click(mask, rng):
-    """A random point well inside the object (distance >= 30% of the max depth)."""
+def _random_interior_click(mask, rng, min_depth=0.3):
+    """A random point inside the object whose distance to the edge is at least
+    min_depth x the object's maximum depth (0 = anywhere inside)."""
     dt = ndimage.distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1]
-    ys, xs = np.nonzero(dt >= 0.3 * dt.max())
+    ys, xs = np.nonzero(dt >= max(min_depth * dt.max(), 1))
     i = rng.integers(len(ys))
     return int(xs[i]), int(ys[i])
 
 
 def build_cards(names, prior_dir, clicker, jitter=False, refine_clicks=2, seed=0, image_dir=None,
-                progress=None):
-    """progress(done, total): optional callback after each image."""
+                progress=None, start="center"):
+    """start: where the first click goes -- "center" (deepest point, the standard
+    protocol), "random" (random point, depth >= 30 %) or "anywhere" (any pixel
+    inside). Refinement clicks continue from that first click.
+    progress(done, total): optional callback after each image."""
     anns = {a.name: a for a in parse_annotations(paths.ANNOTATIONS_XML)}
     rng = np.random.default_rng(seed)
     X, label, target_iou, obj, cand, click, objects = [], [], [], [], [], [], []
@@ -59,7 +63,10 @@ def build_cards(names, prior_dir, clicker, jitter=False, refine_clicks=2, seed=0
                 label.append(o.label); target_iou.append(iou(mask, o.mask))
                 obj.append(oid); cand.append(ctype); click.append(cno)
 
-            starts = [next_click(None, o.mask)[:2]]
+            if start == "center":
+                starts = [next_click(None, o.mask)[:2]]
+            else:
+                starts = [_random_interior_click(o.mask, rng, 0.3 if start == "random" else 0.0)]
             if jitter:
                 starts.append(_random_interior_click(o.mask, rng))
             for s_i, (x, y) in enumerate(starts):
