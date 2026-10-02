@@ -32,10 +32,8 @@ cloud = [
     "marimo",
 ]
 app = [
-    "fastapi",
-    "uvicorn[standard]",
+    "PySide6",
     "onnxruntime",
-    "python-multipart",
 ]
 dev = [
     "pytest",

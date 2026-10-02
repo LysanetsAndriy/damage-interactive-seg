@@ -26,10 +26,11 @@ _to_tensor = transforms.Compose([
 
 @torch.no_grad()
 def predict_probs(model, embed_model, image, patch_size=518, stride=300, model_input=518,
-                  device="cpu", batch_size=8):
+                  device="cpu", batch_size=8, progress=None):
     """Returns (probs [H, W, C] float32, image actually used).
 
     The image is upscaled only if it is smaller than patch_size (as in the notebook).
+    progress(done, total): optional callback after each batch of patches.
     If patch_size != model_input, patches are resized to model_input and the
     predictions resized back.
     """
@@ -60,6 +61,8 @@ def predict_probs(model, embed_model, image, patch_size=518, stride=300, model_i
         for (x, y), p in zip(corners, probs):
             probs_sum[:, y:y + patch_size, x:x + patch_size] += p
             counts[:, y:y + patch_size, x:x + patch_size] += 1
+        if progress:
+            progress(min(start + batch_size, len(grid)), len(grid))
 
     probs = (probs_sum / counts).permute(1, 2, 0).cpu().numpy()
     return probs, image

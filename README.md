@@ -27,6 +27,19 @@ cd third_party/sam2 && SAM2_BUILD_CUDA=0 uv pip install --python ../../.venv/bin
 Data and weights live in the private Hugging Face repo set in `src/dmgseg/paths.py`
 (`HF_REPO`). Locally they are read from `Dataset_CVAT/` in the project root.
 
+## The app (Damage Annotator)
+
+```bash
+.venv/bin/python -m dmgseg.app                 # or: python -m dmgseg.app path/to/image.jpg
+```
+
+A Windows-98-style desktop tool. Left click: new object (SAM mask, class and mask
+chosen by class head A); right click / Ctrl+click: next class; Shift+click: grow;
+Option+click: shrink; 1-5: set class; Delete; Ctrl+Z. File > Export Mask writes a
+PNG of class ids and a JSON with object polygons. The DINOv2 prior runs in the
+background (~40 s per image on the Intel Mac CPU); objects clicked before it is
+ready get their class when it arrives.
+
 ## Layout
 
 - `src/dmgseg/data` — CVAT parser (polygon, box, brush mask; polylines ignored), paper split
@@ -38,4 +51,6 @@ Data and weights live in the private Hugging Face repo set in `src/dmgseg/paths.
 - `configs/` — one YAML per run
 - `scripts/` — one-off utilities (Hugging Face upload, CPU smoke test of training)
 - `tests/` — `pytest`: parser, split, Table 2/3 reproduction, metrics, loss
+- `src/dmgseg/classhead` — class head A (MLP on cards) and B (fusion on feature maps)
+- `src/dmgseg/app` — the desktop app: `engine.py` (logic, GUI-free) and `gui.py` (Qt)
 - `nb/` — thin marimo notebooks for molab
