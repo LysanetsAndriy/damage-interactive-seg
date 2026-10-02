@@ -69,6 +69,22 @@ class SamClicker:
         self.last_score = float(scores[k])
         return masks[k].astype(bool)
 
+    def box_click(self, box, x, y):
+        """Box (x0, y0, x1, y1) + one positive point -> single mask, as a new object.
+        The box is kept as two prompt points (labels 2 and 3, SAM's box encoding), so
+        later clicks refine it like any other object."""
+        self.reset_object()
+        x0, y0, x1, y1 = box
+        self.points = [(x0, y0), (x1, y1), (x, y)]
+        self.labels = [2, 3, 1]
+        with torch.inference_mode():
+            masks, scores, logits = self.predictor.predict(
+                point_coords=np.array(self.points, dtype=np.float32), point_labels=np.array(self.labels),
+                multimask_output=False)
+        self.logits = logits[0]
+        self.last_score = float(scores[0])
+        return masks[0].astype(bool)
+
     def choose_index(self, k):
         """After the first click: continue from candidate k instead of the picked one."""
         masks, scores = self.candidates

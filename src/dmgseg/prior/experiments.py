@@ -83,6 +83,7 @@ def start_in_background(queue, *args, target=None, wait_for=None, **kwargs):
     job = target
 
     def runner(*a, **kw):
+        _quiet_progress_bars()
         if wait_for and is_running(wait_for):
             if callable(kw.get("status")):
                 kw["status"](state="waiting", stage=f"for {wait_for} to finish")
@@ -100,6 +101,19 @@ def _find(queue):
     if t is None:  # e.g. started before a reload: look it up by thread name
         t = next((x for x in threading.enumerate() if x.name == queue), None)
     return t
+
+
+def _quiet_progress_bars():
+    """Background threads must not write to stdout/stderr: in a marimo kernel a thread
+    that is not attached to a running cell has no output stream (AssertionError in
+    marimo's stream). Progress goes to the job's status file instead."""
+    import os
+    os.environ["TQDM_DISABLE"] = "1"
+    try:
+        from huggingface_hub.utils import disable_progress_bars
+        disable_progress_bars()
+    except ImportError:
+        pass
 
 
 def is_running(queue):

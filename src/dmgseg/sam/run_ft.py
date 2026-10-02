@@ -35,7 +35,7 @@ def sam_ft_job(workdir, device, status=None, max_images=None, epochs=12):
         dev_data = SamData(predictor, dev_names, device)
         status(state="training", stage=f"{len(train_data)} train / {len(dev_data)} dev objects")
         info = finetune(predictor, train_data, dev_data, epochs=epochs,
-                        log=lambda m: (print(m), status(stage=m)))
+                        log=lambda m: status(stage=m))
         del train_data, dev_data
         torch.cuda.empty_cache()
         torch.save(trainable_state(predictor.model), out / "finetuned_decoder.pt")
