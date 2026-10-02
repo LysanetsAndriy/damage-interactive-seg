@@ -112,7 +112,10 @@ def _quiet_progress_bars():
     # A fresh write lock per job: a thread that crashed while holding tqdm's shared
     # lock (it happened: a marimo stream error inside tqdm.write) would otherwise
     # block every later progress bar in this process forever.
-    from tqdm.std import TqdmDefaultWriteLock
+    from tqdm.std import TRLock, TqdmDefaultWriteLock
+    TqdmDefaultWriteLock.th_lock = TRLock()           # the lock instances actually share
+    if hasattr(TqdmDefaultWriteLock, "mp_lock"):
+        del TqdmDefaultWriteLock.mp_lock              # recreated by the next instance
     cls.set_lock(TqdmDefaultWriteLock())
     if not getattr(cls, "_dmgseg_quiet", False):
         original = cls.__init__
