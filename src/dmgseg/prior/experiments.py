@@ -72,14 +72,24 @@ def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, basel
         raise
 
 
-def start_in_background(queue, *args, target=None, **kwargs):
+def start_in_background(queue, *args, target=None, wait_for=None, **kwargs):
     """Start target (default run_queue(queue, ...)) in a daemon thread unless a job
-    with this name is already running."""
+    with this name is already running. wait_for: name of a job to finish first
+    (works for any target; a `status` keyword argument, if given, is told)."""
     if is_running(queue):
         return f"{queue}: already running"
     if target is None:
         target, args = run_queue, (queue, *args)
-    t = threading.Thread(target=target, args=args, kwargs=kwargs, name=queue, daemon=True)
+    job = target
+
+    def runner(*a, **kw):
+        if wait_for and is_running(wait_for):
+            if callable(kw.get("status")):
+                kw["status"](state="waiting", stage=f"for {wait_for} to finish")
+            _find(wait_for).join()
+        return job(*a, **kw)
+
+    t = threading.Thread(target=runner, args=args, kwargs=kwargs, name=queue, daemon=True)
     t.start()
     _threads[queue] = t
     return f"{queue}: started"
