@@ -107,9 +107,11 @@ class Models:
         self.clicker = SamClicker("small", "cpu", decoder_weights=sam_ft if sam_ft.exists() else None)
         self.sam_finetuned = sam_ft.exists()
         progress and progress(1, steps)
-        head = paths.ARTIFACTS / "classhead" / "head_a.pt"
+        # head A trained on masks of the same SAM the app uses
+        name = "head_a_samft.pt" if self.sam_finetuned else "head_a.pt"
+        head = paths.ARTIFACTS / "classhead" / name
         if not head.exists():
-            hub.download_if_exists("classhead/head_a.pt", paths.ARTIFACTS)
+            hub.download_if_exists(f"classhead/{name}", paths.ARTIFACTS)
         self.head = ClassHead(head)
         progress and progress(2, steps)
         self.prior_model = load_prior_model(hub.prior_weights(), "cpu")
