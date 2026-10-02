@@ -21,7 +21,7 @@ train:
   weight_decay: 1.0e-3
   layer_decay: 0.8                     # encoder block i of 21: lr x 0.8^(22 - (i+1))
   amp_dtype: float16                   # torch.cuda.amp as in the paper
-  push_last_every: 5                   # epochs between resume-checkpoint uploads
+  push_last_every: 0                   # no resume checkpoints on the Hub (storage limit)
   scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
   loss: {ce: 0.3, dice: 0.35, iou: 0.35}
   # Other, Building, Roof, Damage, Broken Window, Damaged roof (Table 7)

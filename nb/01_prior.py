@@ -455,7 +455,7 @@ def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, g_button, hub, mo, paths):
             "B2b at training scale": {**_g_spec(_b2b_cfg, _b2b),
                                       "eval": {"patch_size": 640, "stride": 370, "model_input": 518}},
         },
-        wait_for="f_queue",
+        wait_for="h_queue",
     )
     mo.md(f"**{g_message}**")
     return

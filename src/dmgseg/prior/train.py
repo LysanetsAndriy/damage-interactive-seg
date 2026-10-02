@@ -234,13 +234,14 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
         (run_dir / "history.json").write_text(json.dumps(history, indent=1))
 
         if push:
-            # Every upload stays in the repo history, so the 3.8 GB resume checkpoint
-            # is pushed only every few epochs; best.pt (1.3 GB) whenever it improves.
+            # Every upload stays in the repo history and counts against the ~100 GB
+            # private storage limit (reached on 2026-10-02). So only the small history
+            # goes up each epoch; best.pt/last.pt stay local. Uploading the 3.8 GB
+            # resume checkpoint is opt-in (push_last_every > 0).
             hub.upload(run_dir / "history.json", f"{hub_prefix}/history.json")
-            if improved:
-                hub.upload(run_dir / "best.pt", f"{hub_prefix}/best.pt")
+            every = cfg.train.get("push_last_every", 0)
             final = epoch + 1 == cfg.train.epochs
-            if not final and (epoch + 1) % cfg.train.get("push_last_every", 5) == 0:
+            if every and not final and (epoch + 1) % every == 0:
                 hub.upload(run_dir / "last.pt", f"{hub_prefix}/last.pt")
 
     # Weights after the last epoch (best.pt is chosen by validation loss, which can
