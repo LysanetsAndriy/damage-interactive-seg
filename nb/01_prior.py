@@ -546,5 +546,60 @@ def _(WORKDIR, h_refresh, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## I. Fine-tune SAM's decoder on the damage dataset (~1 h)
+
+    SAM 2.1-S image encoder frozen; prompt encoder + mask decoder trained with
+    simulated clicks (and boxes) on the 196 training images outside fold 0; fold 0
+    is the dev set for early stopping. Then zero-shot vs fine-tuned SAM on the 44
+    validation images (NoC@85/90). Result: `sam/finetuned_decoder.pt`.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    i_button = mo.ui.run_button(label="Fine-tune SAM (~1 h)")
+    i_button
+    return (i_button,)
+
+
+@app.cell
+def _(DEVICE, WORKDIR, i_button, mo):
+    mo.stop(not i_button.value)
+
+    from dmgseg.sam.install import ensure_sam2 as _i_sam2
+    from dmgseg.sam.run_ft import sam_ft_job
+    from dmgseg.prior.experiments import start_in_background as _i_start, status_writer as _i_status
+
+    _i_sam2()
+    i_message = _i_start("i_queue", WORKDIR, DEVICE, target=sam_ft_job, status=_i_status(WORKDIR, "i_queue"))
+    mo.md(f"**{i_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    i_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="30s", label="Auto-refresh")
+    i_refresh
+    return (i_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, i_refresh, mo):
+    i_refresh
+
+    import json as _ijson
+
+    _p = WORKDIR / "runs" / "i_queue" / "status.json"
+    _ist = _ijson.loads(_p.read_text()) if _p.exists() else {}
+    mo.md(f"**state:** {_ist.get('state', '-')} · **stage:** {_ist.get('stage', '-')} · **updated:** {_ist.get('updated', '-')}"
+          + (f"\n\n{_ist['table']}" if _ist.get("table") else "")
+          + (f"\n\n```\n{_ist['error'][-1500:]}\n```" if _ist.get("error") else ""))
+    return
+
+
 if __name__ == "__main__":
     app.run()

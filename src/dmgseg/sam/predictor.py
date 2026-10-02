@@ -22,10 +22,14 @@ class SamClicker:
     choose(masks, scores, x, y) -> index (e.g. a prior-based rule).
     """
 
-    def __init__(self, size="small", device="cpu", choose="score", predictor=None):
+    def __init__(self, size="small", device="cpu", choose="score", predictor=None, decoder_weights=None):
+        """decoder_weights: fine-tuned prompt encoder + mask decoder (sam/finetune.py)."""
         from sam2.sam2_image_predictor import SAM2ImagePredictor
 
         self.predictor = predictor or SAM2ImagePredictor.from_pretrained(SAM2_MODELS[size], device=device)
+        if decoder_weights is not None:
+            from dmgseg.sam.finetune import load_finetuned
+            load_finetuned(self.predictor.model, decoder_weights, device)
         self.choose = choose
         self.oracle_gt = None
         self.reset_object()
