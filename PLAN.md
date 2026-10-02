@@ -89,6 +89,20 @@ Full-image global mIoU on the validation set (fixed labels): paper model 0.607 �
 - **Decision:** the tool's prior is **B2b** (`runs/dinov2_emb_6c_b2b/final.pt`, `paths.PRIOR_RUN`). Its recipe never uses the validation set (fixed schedule, final epoch), unlike the paper model's lowest-val-loss selection. The paper model (`paths.PAPER_WEIGHTS`) stays the published reference.
 - The k-fold (section D) uses the B2b recipe → `priors/dinov2_emb_6c_b2b/` (all images) and `priors/oof_dinov2_emb_6c_b2b/` (out-of-fold, training images).
 
+### 0.6c Class head A beats the rules (2026-10-02)
+
+Validation, 1,314 clickable objects (44 images), masks after 3 clicks; head A = MLP on 288-d cards, trained on 6,899 objects (out-of-fold priors), early stopping on 2,214 dev objects (fold-0 images); 3 seeds:
+
+| | Rules (prior average + SAM score) | Head A |
+|---|---|---|
+| Left click gives the right class | 56.8 % | **80.4 % ± 0.8** |
+| Manual key needed (right class 3rd or lower) | 21.5 % | **2.8 % ± 0.2** |
+| First-click mask IoU (oracle 0.658) | 0.565 | **0.591 ± 0.003** |
+
+Per class: Broken Window 55.5 → 85.0 % (manual 24.6 → 0.1 %), Damage 58.9 → 71.5 %, Building 76.7 → 85.0 %, Roof 27.5 → 35.0 %; Damaged roof got worse (67.6 → 62.2 %). The mask choice gains little (Building stays at 0.28 vs the 0.61 oracle): the motivation for B (feature maps).
+
+Inference-scale test: B2b at 640→518 crops 0.6096 vs 518 native 0.6100, no difference. RandomResizedCrop(0.6–0.8) already zooms training patches by 1.12–1.29×, so the effective training scale was ~100 %.
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
