@@ -140,6 +140,17 @@ Full-image global IoU on the validation set (fixed labels), B2b recipe, each mod
 - More **context** (P3) helps the large classes, especially **Roof +5.5** and Building, and gives the best mean (+0.9 over B2b). More **detail** (P2) gives the best Broken Window (+1.5). Less context (P1) hurts Roof (−3.5).
 - All differences are ≤ 1 point overall, below the 1.5-point bar set for replacing the prior, so **B2b stays the prior**. Worth reporting as a per-class context/detail trade-off; a P2+P3 ensemble is a cheap follow-up (inference only).
 
+### 0.6e SAM 2.1-S decoder fine-tuning (I, 2026-10-02)
+
+Prompt encoder + mask decoder trained (image encoder frozen) with simulated clicks and boxes on 196 training images, early stopping on 50 dev images (fold 0); ~1 min/epoch on molab. Validation (44 images, 1,477 objects incl. Other, center first click, 20 clicks):
+
+| SAM | IoU@1 | IoU@3 | IoU@5 | NoC@85 | NoC@90 | never reaches 90 % |
+|---|---|---|---|---|---|---|
+| zero-shot | 0.534 | 0.723 | 0.784 | 8.56 | 12.83 | 43.0 % |
+| **fine-tuned** | **0.574** | **0.781** | **0.837** | **6.29** | **10.19** | **30.5 %** |
+
+27 % fewer clicks to reach 85 % IoU. Per class NoC@85: Other 11.3→7.4, Broken Window 7.2→5.0, Damage 10.4→8.2, Roof 11.9→10.5, Damaged roof 14.1→12.7, Building 5.2→5.0. Weights: `sam/finetuned_decoder.pt` (Hub).
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
