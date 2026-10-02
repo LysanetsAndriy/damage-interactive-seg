@@ -107,8 +107,17 @@ def _quiet_progress_bars():
     """Background threads must not write to stdout/stderr: in a marimo kernel a thread
     that is not attached to a running cell has no output stream (AssertionError in
     marimo's stream). Progress goes to the job's status file instead."""
-    import os
-    os.environ["TQDM_DISABLE"] = "1"
+    import tqdm as _tqdm_mod
+    cls = _tqdm_mod.tqdm
+    if not getattr(cls, "_dmgseg_quiet", False):
+        original = cls.__init__
+
+        def init(self, *args, **kwargs):
+            if threading.current_thread() is not threading.main_thread():
+                kwargs["disable"] = True
+            original(self, *args, **kwargs)
+        cls.__init__ = init
+        cls._dmgseg_quiet = True
     try:
         from huggingface_hub.utils import disable_progress_bars
         disable_progress_bars()
