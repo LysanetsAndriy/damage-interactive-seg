@@ -101,6 +101,16 @@ Validation, 1,314 clickable objects (44 images), masks after 3 clicks; head A = 
 
 Per class: Broken Window 55.5 → 85.0 % (manual 24.6 → 0.1 %), Damage 58.9 → 71.5 %, Building 76.7 → 85.0 %, Roof 27.5 → 35.0 %; Damaged roof got worse (67.6 → 62.2 %). The mask choice gains little (Building stays at 0.28 vs the 0.61 oracle): the motivation for B (feature maps).
 
+Robustness to where the user clicks first (saved head A, the same 1,314 objects):
+
+| First click | 1st-click IoU: SAM / head | Right class: rules / head | Manual: rules / head |
+|---|---|---|---|
+| center (protocol) | 0.565 / 0.588 | 56.8 % / 81.4 % | 21.5 % / 3.1 % |
+| random (≥ 30 % depth) | 0.554 / 0.581 | 56.2 % / 81.3 % | 21.8 % / 3.0 % |
+| anywhere inside | 0.531 / 0.569 | 56.4 % / 82.0 % | 22.0 % / 3.0 % |
+
+The class choice is insensitive to the click position; mask quality drops slightly for careless clicks, and the head stays ahead of SAM's own choice.
+
 Inference-scale test: B2b at 640→518 crops 0.6096 vs 518 native 0.6100, no difference. RandomResizedCrop(0.6–0.8) already zooms training patches by 1.12–1.29×, so the effective training scale was ~100 %.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
