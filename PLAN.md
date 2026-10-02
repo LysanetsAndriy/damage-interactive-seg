@@ -151,6 +151,22 @@ Prompt encoder + mask decoder trained (image encoder frozen) with simulated clic
 
 27 % fewer clicks to reach 85 % IoU. Per class NoC@85: Other 11.3→7.4, Broken Window 7.2→5.0, Damage 10.4→8.2, Roof 11.9→10.5, Damaged roof 14.1→12.7, Building 5.2→5.0. Weights: `sam/finetuned_decoder.pt` (Hub).
 
+### 0.6f Auto pre-label and image-level evaluation (2026-10-02)
+
+**Pre-label:** prior blobs snapped by SAM with box + point prompts; "grow-only" (SAM may only add unlabeled pixels to a blob). 10 val images: prior map 0.6705 → pre-label 0.6856 mIoU. Without grow-only, SAM spills cost Roof −12 points.
+
+**Image-level evaluation** (44 val images, global mIoU after k interactions; a simulated annotator fixes the largest wrong region with the action a person would take, undoing actions that make the image worse; the undo counts as an interaction):
+
+| Start, SAM | k=0 | 2 | 3 | 5 | 10 | 15 | 20 |
+|---|---|---|---|---|---|---|---|
+| empty, zero-shot (v1 user, no undo) | 0.107 | 0.180 | 0.201 | 0.234 | 0.294 | 0.328 | 0.349 |
+| empty, fine-tuned | 0.107 | 0.175 | 0.227 | 0.244 | 0.285 | 0.317 | 0.329 |
+| **pre-label, zero-shot** | **0.618** | 0.634 | 0.637 | 0.656 | 0.682 | 0.697 | 0.681 |
+| **pre-label, fine-tuned** | 0.613 | 0.649 | 0.653 | 0.662 | 0.642 | 0.692 | 0.697 |
+
+- **The automatic draft is worth far more than 20 clicks:** it starts at 0.61–0.62, while 20 clicks from an empty image reach only 0.33–0.35.
+- Fine-tuned SAM helps object-level clicking a lot (NoC@85 −27 %) but whole images only slightly (± noise): the image mIoU is dominated by class decisions and large regions. ~25 % of the simulated actions were undone as harmful.
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
