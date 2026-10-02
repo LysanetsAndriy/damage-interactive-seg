@@ -125,6 +125,21 @@ Diagnosis: (1) one crop per click is sized by the largest of SAM's 3 candidates,
 
 Inference-scale test: B2b at 640→518 crops 0.6096 vs 518 native 0.6100, no difference. RandomResizedCrop(0.6–0.8) already zooms training patches by 1.12–1.29×, so the effective training scale was ~100 %.
 
+### 0.6d Crop size / scale experiments (G, 2026-10-02)
+
+Full-image global IoU on the validation set (fixed labels), B2b recipe, each model at its own scale:
+
+| Model (crop → input) | mIoU | Building | Roof | Damage | Broken Window | Damaged roof |
+|---|---|---|---|---|---|---|
+| paper model (518→518 eval) | 0.607 | 0.670 | 0.522 | 0.549 | 0.434 | 0.530 |
+| B2b (640→518 train; 518 eval) | 0.610 | 0.681 | 0.509 | 0.559 | 0.439 | 0.537 |
+| P1 518→518 (more detail, less context) | 0.605 | 0.684 | 0.474 | **0.569** | 0.419 | **0.547** |
+| P2 640→644 (more detail, same context) | 0.612 | **0.694** | 0.492 | 0.553 | **0.454** | 0.537 |
+| P3 800→518 (more context) | **0.619** | **0.694** | **0.564** | 0.542 | 0.438 | 0.533 |
+
+- More **context** (P3) helps the large classes, especially **Roof +5.5** and Building, and gives the best mean (+0.9 over B2b). More **detail** (P2) gives the best Broken Window (+1.5). Less context (P1) hurts Roof (−3.5).
+- All differences are ≤ 1 point overall, below the 1.5-point bar set for replacing the prior, so **B2b stays the prior**. Worth reporting as a per-class context/detail trade-off; a P2+P3 ensemble is a cheap follow-up (inference only).
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
