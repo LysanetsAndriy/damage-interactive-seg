@@ -225,9 +225,22 @@ class Session:
         return m & (lm == OTHER)
 
     def export(self, png_path, json_path=None, source_name=""):
-        """PNG: class id per pixel. JSON: objects with class, area, bbox, polygon."""
+        """Writes three files:
+        <name>.png          class id per pixel (0 Other ... 5 Damaged roof), saved as a
+                            palette PNG: viewers show the class colors, while reading it
+                            with PIL (np.array(Image.open(...))) gives the ids 0-5
+        <name>_overlay.jpg  the photo with the class colors, for looking at
+        <name>.json         objects with class, area, bbox and outline polygons"""
+        from PIL import Image as _Image
         lm = self.label_map()
-        cv2.imwrite(str(png_path), lm)
+        pal = _Image.fromarray(lm, mode="P")
+        palette = [0] * 768
+        for c, rgb in COLORS.items():
+            palette[3 * c:3 * c + 3] = list(rgb)
+        pal.putpalette(palette)
+        pal.save(str(png_path))
+        _Image.fromarray(self.overlay(alpha=0.5, active_outline=False)).save(
+            str(Path(png_path).with_name(Path(png_path).stem + "_overlay.jpg")), quality=90)
         objs = []
         for o in self.objects:
             if o.label is None:

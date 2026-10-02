@@ -496,7 +496,8 @@ class MainWindow(QtWidgets.QMainWindow):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export Mask", default, "PNG (*.png)")
         if path:
             png, js = self.session.export(path, source_name=self.image_path.name)
-            self.status(f"Saved {Path(png).name} and {Path(js).name}")
+            self.status(f"Saved {Path(png).name} (class mask), {Path(png).stem}_overlay.jpg (preview) "
+                        f"and {Path(js).name}")
 
     # -- drawing -----------------------------------------------------------------
     def redraw(self):
