@@ -19,15 +19,20 @@ class UNetDinoV2(nn.Module):
     """U-Net that uses DINOv2 (ViT-L/14) as the encoder backbone."""
 
     def __init__(self, num_classes=NUM_CLASSES,
-                 dino_model="vit_large_patch14_reg4_dinov2.lvd142m", pretrained=False):
+                 dino_model="vit_large_patch14_reg4_dinov2.lvd142m", pretrained=False, img_size=None):
+        """img_size: model input side (a multiple of 14); None = DINOv2's 518. The
+        position embeddings are resampled to the new grid when the model is built."""
         super().__init__()
         self.num_classes = num_classes
+        self.img_size = img_size or 518
 
+        extra = {"img_size": img_size} if img_size else {}
         self.encoder = timm.create_model(
             dino_model,
             pretrained=pretrained,
             features_only=True,
             out_indices=(1, 7, 12, 20),
+            **extra,
         )
         c1, c2, c3, c4 = self.encoder.feature_info.channels()
 
@@ -86,8 +91,8 @@ class UNetDinoV2(nn.Module):
         return self.conv_last(out)
 
 
-def load_prior_model(weights_path, device="cpu"):
-    model = UNetDinoV2(pretrained=False)
+def load_prior_model(weights_path, device="cpu", img_size=None):
+    model = UNetDinoV2(pretrained=False, img_size=img_size)
     state = torch.load(weights_path, map_location=device)
     model.load_state_dict(state, strict=True)
     return model.to(device).eval()

@@ -34,11 +34,15 @@ def _random_interior_click(mask, rng):
     return int(xs[i]), int(ys[i])
 
 
-def build_cards(names, prior_dir, clicker, jitter=False, refine_clicks=2, seed=0, image_dir=None):
+def build_cards(names, prior_dir, clicker, jitter=False, refine_clicks=2, seed=0, image_dir=None,
+                progress=None):
+    """progress(done, total): optional callback after each image."""
     anns = {a.name: a for a in parse_annotations(paths.ANNOTATIONS_XML)}
     rng = np.random.default_rng(seed)
     X, label, target_iou, obj, cand, click, objects = [], [], [], [], [], [], []
-    for name in tqdm(names, desc="cards"):
+    for i_img, name in enumerate(tqdm(names, desc="cards")):
+        if progress and i_img:
+            progress(i_img, len(names))
         ann = anns[name]
         image = np.asarray(Image.open(Path(image_dir or paths.IMAGES_DIR) / name).convert("RGB"))
         prior = fit_prior(load_prior(Path(prior_dir) / f"{name}.npz"), *image.shape[:2])

@@ -410,5 +410,85 @@ def _(WORKDIR, f_refresh, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## G. Patch size / scale experiments (~3 h, waits for F)
+
+    B2b recipe, only the crops and the DINOv2 input change:
+
+    - **P1** 518 px crops, native (objects 100 %, less context)
+    - **P2** 640 px crops at 644 px input (objects 100 %, same context as B2b)
+    - **P3** 800 px crops shrunk to 518 (objects 65 %, more context)
+
+    Each is evaluated at its own scale, against the paper model and B2b (at native
+    518 px crops and at its 640->518 training scale). Starts automatically when the
+    card job (F) is finished. Progress in the table below.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    g_button = mo.ui.run_button(label="Queue P1, P2, P3 (starts after F)")
+    g_button
+    return (g_button,)
+
+
+@app.cell
+def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, g_button, hub, mo, paths):
+    mo.stop(not g_button.value)
+
+    from dmgseg.config import load_config as _g_load
+    from dmgseg.prior.compare import checkpoint_spec as _g_spec
+    from dmgseg.prior.experiments import start_in_background as _g_start
+
+    _b2b_cfg = _g_load(REPO / "configs" / "prior_dinov2_6c_b2b.yaml")
+    _b2b = hub.prior_weights(WORKDIR)
+    g_message = _g_start(
+        "g_queue",
+        [REPO / "configs" / f"prior_dinov2_6c_{_k}.yaml" for _k in ("p1", "p2", "p3")],
+        WORKDIR, embed_model, embed_fn, DEVICE,
+        baselines={
+            "paper model": paths.PAPER_WEIGHTS,
+            "B2b": _b2b,
+            "B2b at training scale": {**_g_spec(_b2b_cfg, _b2b),
+                                      "eval": {"patch_size": 640, "stride": 370, "model_input": 518}},
+        },
+        wait_for="f_queue",
+    )
+    mo.md(f"**{g_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    g_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="1m", label="Auto-refresh")
+    g_refresh
+    return (g_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, g_refresh, mo):
+    g_refresh
+
+    import json as _gjson
+
+    _rows = []
+    for _run in ("dinov2_emb_6c_p1_518native", "dinov2_emb_6c_p2_640to644", "dinov2_emb_6c_p3_800to518"):
+        _h = WORKDIR / "runs" / _run / "history.json"
+        for _r in (_gjson.loads(_h.read_text()) if _h.exists() else [])[-1:]:
+            _rows.append(f"| {_run} | {_r['epoch'] + 1}/15 | {_r['seconds']:.0f}s | {_r['val']['global/miou']:.4f} | {_r['val']['global/mf1']:.4f} |")
+    _p = WORKDIR / "runs" / "g_queue" / "status.json"
+    _gst = _gjson.loads(_p.read_text()) if _p.exists() else {}
+    mo.md(
+        f"**state:** {_gst.get('state', '-')} · **stage:** {_gst.get('stage', '-')} · **updated:** {_gst.get('updated', '-')}\n\n"
+        + "| run | epoch | time/epoch | val mIoU (patches) | val mF1 |\n|---|---|---|---|---|\n" + "\n".join(_rows)
+        + (f"\n\n**Result**\n\n{_gst['table']}" if _gst.get("table") else "")
+        + (f"\n\n```\n{_gst['error'][-1500:]}\n```" if _gst.get("error") else "")
+    )
+    return
+
+
 if __name__ == "__main__":
     app.run()

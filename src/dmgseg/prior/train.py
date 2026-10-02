@@ -179,7 +179,8 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
     print(f"patches: train={len(train_ds)} val={len(val_ds)} | device={device}")
 
     model = UNetDinoV2(cfg.model.num_classes, cfg.model.backbone,
-                       pretrained=cfg.model.pretrained_backbone).to(device)
+                       pretrained=cfg.model.pretrained_backbone,
+                       img_size=cfg.model.get("img_size")).to(device)
     weights = torch.tensor(cfg.train.class_weights, dtype=torch.float32, device=device)
     criterion = CombinedLoss(**cfg.train.loss, class_weights=weights).to(device)
     optimizer = torch.optim.AdamW(param_groups(model, cfg.train.lr, cfg.train.weight_decay,

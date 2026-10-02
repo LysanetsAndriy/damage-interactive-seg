@@ -33,7 +33,8 @@ def cards_job(workdir, device, status=None):
             if HfApi().file_exists(paths.HF_REPO, target, repo_type="dataset"):
                 continue
             status(state="building", stage=f"{name} ({len(names)} images)")
-            cards = build_cards(names, prior_dir, clicker, jitter=jitter)
+            cards = build_cards(names, prior_dir, clicker, jitter=jitter,
+                                progress=lambda d, t, n=name: status(stage=f"{n}: {d}/{t} images") if d % 10 == 0 else None)
             out = workdir / target
             save_cards(cards, out)
             hub.upload(out, target, message=f"Class-head cards ({name}): {cards['X'].shape[0]} cards, "

@@ -14,10 +14,10 @@ from huggingface_hub import HfApi
 
 from dmgseg import hub, paths
 from dmgseg.config import load_config
-from dmgseg.prior.compare import compare_checkpoints, results_table
+from dmgseg.prior.compare import checkpoint_spec, compare_checkpoints, results_table
 from dmgseg.prior.train import train
 
-_threads = {}
+_threads = globals().get("_threads") or {}  # survives importlib.reload
 
 
 def status_writer(workdir, queue):
@@ -41,12 +41,16 @@ def _final_on_hub(run_name):
     return HfApi().file_exists(paths.HF_REPO, f"runs/{run_name}/final.pt", repo_type="dataset")
 
 
-def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, baselines):
+def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, baselines, wait_for=None):
     """Train each config (skipping runs whose final.pt is already on the Hub), then
-    compare baselines + new final.pt files on full validation images."""
+    compare baselines + new final.pt files on full validation images, each at its
+    own training scale. wait_for: name of another background job to finish first."""
     workdir = Path(workdir)
     finals = {}
     try:
+        if wait_for and is_running(wait_for):
+            _status(workdir, queue, state="waiting", stage=f"for {wait_for} to finish")
+            _find(wait_for).join()
         for cfg_path in config_paths:
             cfg = load_config(cfg_path)
             run_dir = workdir / "runs" / cfg.run_name
@@ -54,9 +58,9 @@ def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, basel
                 hub.download_if_exists(f"runs/{cfg.run_name}/final.pt", workdir)
                 print(f"{cfg.run_name}: already trained")
             else:
-                _status(workdir, queue, state="training", run=cfg.run_name)
+                _status(workdir, queue, state="training", run=cfg.run_name, stage=cfg.run_name)
                 train(cfg, workdir, embed_fn, device=device)
-            finals[cfg.run_name] = run_dir / "final.pt"
+            finals[cfg.run_name] = checkpoint_spec(cfg, run_dir / "final.pt")
 
         _status(workdir, queue, state="comparing")
         out = workdir / "runs" / queue / "comparison.json"
@@ -71,8 +75,7 @@ def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, basel
 def start_in_background(queue, *args, target=None, **kwargs):
     """Start target (default run_queue(queue, ...)) in a daemon thread unless a job
     with this name is already running."""
-    t = _threads.get(queue)
-    if t is not None and t.is_alive():
+    if is_running(queue):
         return f"{queue}: already running"
     if target is None:
         target, args = run_queue, (queue, *args)
@@ -82,6 +85,13 @@ def start_in_background(queue, *args, target=None, **kwargs):
     return f"{queue}: started"
 
 
-def is_running(queue):
+def _find(queue):
     t = _threads.get(queue)
+    if t is None:  # e.g. started before a reload: look it up by thread name
+        t = next((x for x in threading.enumerate() if x.name == queue), None)
+    return t
+
+
+def is_running(queue):
+    t = _find(queue)
     return t is not None and t.is_alive()
