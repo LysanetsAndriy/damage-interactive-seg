@@ -5,7 +5,9 @@ the background, may arrive later) and a list of objects. Each object has a mask,
 a class ranking from the class head (left click = first, right click = next) and
 the SAM prompt history, so it can be refined later.
 
-The "Other" class is never assigned: unlabeled pixels are Other.
+The class head never assigns "Other" (unlabeled pixels are Other), but the user can
+mark an object as Other (key 0, or the last step of right-click cycling); such
+objects are painted on top and erase the labels behind them.
 """
 import copy
 import json
@@ -21,7 +23,12 @@ from dmgseg.classhead.mlp import CardHead, predict
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE, class_ranking, fit_prior
 
-PAINT_ORDER = list(CLICKABLE)    # paint lower priority first, like the dataset
+OTHER = 0
+# Paint lower-priority classes first, like the dataset. Objects the user marks as
+# "Other" (trees, cars, poles in front of a building) are painted LAST, so they cut
+# their area out of whatever is behind them; unlabeled pixels are Other as well.
+PAINT_ORDER = list(CLICKABLE) + [OTHER]
+CYCLE_END = [OTHER]              # right-click cycling ends with "Other"
 COLORS = {0: (160, 160, 160), 1: (40, 170, 60), 2: (255, 165, 0), 3: (170, 50, 200),
           4: (30, 90, 255), 5: (230, 30, 30)}
 
@@ -42,8 +49,11 @@ class Obj:
 
     @property
     def label(self):
+        """Current class; None while the class is still pending (not painted yet)."""
         if self.manual is not None:
             return self.manual
+        if self.pending:
+            return None
         return self.ranking[self.choice % len(self.ranking)] if self.ranking else None
 
 
@@ -84,11 +94,11 @@ class Session:
 
     def _ranking(self, o):
         if self.prior is None:
-            return list(CLICKABLE)
+            return list(CLICKABLE) + CYCLE_END
         if self.head is None:
-            return class_ranking(self.prior, o.mask)
+            return class_ranking(self.prior, o.mask) + CYCLE_END
         probs, _ = self.head.score([card(o.mask, self.prior, self.embed, o.sam_score, o.cand_type, o.click_no)])
-        return [CLICKABLE[i] for i in np.argsort(-probs[0])]
+        return [CLICKABLE[i] for i in np.argsort(-probs[0])] + CYCLE_END
 
     # -- actions -------------------------------------------------------------
     def _snapshot(self):
@@ -117,11 +127,11 @@ class Session:
             cards = [card(m, self.prior, self.embed, float(s), k, 1) for k, (m, s) in enumerate(zip(masks, scores))]
             probs, quality = self.head.score(cards)
             k = int(np.argmax(quality))
-            ranking = [CLICKABLE[i] for i in np.argsort(-probs[k])]
+            ranking = [CLICKABLE[i] for i in np.argsort(-probs[k])] + CYCLE_END
             pending = False
         else:
             k = int(np.argmax(scores))
-            ranking = class_ranking(self.prior, masks[k]) if self.prior is not None else list(CLICKABLE)
+            ranking = (class_ranking(self.prior, masks[k]) if self.prior is not None else list(CLICKABLE)) + CYCLE_END
             pending = self.prior is None
         mask = c.choose_index(k)
         o = Obj(mask=mask, ranking=ranking, sam_score=float(scores[k]), cand_type=k, click_no=1,
@@ -180,7 +190,16 @@ class Session:
 
     def counts(self):
         labels = [o.label for o in self.objects if o.label is not None]
-        return {c: labels.count(c) for c in CLICKABLE}
+        return {c: labels.count(c) for c in list(CLICKABLE) + [OTHER]}
+
+    def other_mask(self):
+        """Pixels explicitly marked as Other (shown hatched gray in the overlay)."""
+        lm = self.label_map()
+        m = np.zeros((self.h, self.w), bool)
+        for o in self.objects:
+            if o.label == OTHER:
+                m |= o.mask
+        return m & (lm == OTHER)
 
     def export(self, png_path, json_path=None, source_name=""):
         """PNG: class id per pixel. JSON: objects with class, area, bbox, polygon."""
@@ -208,6 +227,14 @@ class Session:
         for c in CLICKABLE:
             m = lm == c
             out[m] = (1 - alpha) * out[m] + alpha * np.array(COLORS[c])
+        other = self.other_mask()
+        if other.any():
+            yy, xx = np.mgrid[:self.h, :self.w]
+            stripes = ((xx + yy) // 6) % 2 == 0          # hatched gray = marked as Other
+            m = other & stripes
+            out[m] = (1 - alpha) * out[m] + alpha * np.array(COLORS[OTHER])
+            m = other & ~stripes
+            out[m] = (1 - alpha / 2) * out[m] + (alpha / 2) * np.array(COLORS[OTHER])
         out = out.astype(np.uint8)
         if active_outline and self.active is not None and self.active < len(self.objects):
             cnt, _ = cv2.findContours(self.objects[self.active].mask.astype(np.uint8), cv2.RETR_EXTERNAL,

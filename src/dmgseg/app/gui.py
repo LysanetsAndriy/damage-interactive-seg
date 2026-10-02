@@ -8,7 +8,9 @@ Mouse (on the image):
     Shift+click           grow the active object (positive refinement)
     Alt(Option)+click     shrink the active object (negative refinement)
     wheel                 zoom, middle button / Space+drag: pan
-Keys: 1-5 set the class of the active object, Delete removes it, Ctrl+Z undo.
+Keys: 1-5 set the class of the active object, 0 marks it as Other (e.g. a tree in
+front of the building: it is cut out of what is behind), Delete/Backspace removes
+it, Ctrl+Z undo.
 """
 import sys
 import time
@@ -237,7 +239,7 @@ class MainWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("Classes")
         bl = QtWidgets.QVBoxLayout(box)
         self.class_list = QtWidgets.QListWidget()
-        self.class_list.setFixedHeight(5 * 22 + 8)
+        self.class_list.setFixedHeight(6 * 22 + 8)
         self.class_list.itemClicked.connect(self.on_class_item)
         bl.addWidget(self.class_list)
         v.addWidget(box)
@@ -248,7 +250,7 @@ class MainWindow(QtWidgets.QMainWindow):
         bl2.addWidget(self.object_list)
         v.addWidget(box2, 1)
         hint = QtWidgets.QLabel("Left click: new object\nRight click: next class\nShift+click: grow\n"
-                                "Option+click: shrink\n1-5: set class, Del: delete")
+                                "Option+click: shrink\n1-5: set class, 0: Other\n⌫ (Backspace): delete")
         hint.setFrameShape(QtWidgets.QFrame.Panel)
         hint.setFrameShadow(QtWidgets.QFrame.Sunken)
         v.addWidget(hint)
@@ -274,7 +276,9 @@ class MainWindow(QtWidgets.QMainWindow):
         f.addAction("E&xit", self.close, QtGui.QKeySequence.Quit)
         e = mb.addMenu("&Edit")
         self.act_undo = e.addAction("&Undo", self.undo, QtGui.QKeySequence.Undo)
-        e.addAction("&Delete Object", self.delete_active, QtGui.QKeySequence.Delete)
+        act_del = e.addAction("&Delete Object", self.delete_active)
+        # On a Mac keyboard the big delete key is Backspace; Delete is Fn+Backspace.
+        act_del.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_Backspace), QtGui.QKeySequence.Delete])
         vmenu = mb.addMenu("&View")
         vmenu.addAction("Fit to &Window", lambda: self.canvas.fitInView(self.canvas.item, QtCore.Qt.KeepAspectRatio), "F")
         self.act_prior = vmenu.addAction("Show &Prior Map", self.toggle_prior, "P")
@@ -293,13 +297,17 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogSaveButton), "Export", self.export_dialog)
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_ArrowBack), "Undo", self.undo)
         tb.addSeparator()
-        tb.addWidget(QtWidgets.QLabel(" Opacity: "))
+        tb.addWidget(QtWidgets.QLabel(" Color strength: "))
         s = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         s.setRange(0, 100)
         s.setValue(int(self.alpha * 100))
         s.setFixedWidth(120)
-        s.valueChanged.connect(lambda v: (setattr(self, "alpha", v / 100), self.redraw()))
+        tip = "How strongly the class colors cover the photo (0 % = photo only, 100 % = colors only)"
+        s.setToolTip(tip)
+        pct = QtWidgets.QLabel(f" {int(self.alpha * 100)} % ")
+        s.valueChanged.connect(lambda v: (setattr(self, "alpha", v / 100), pct.setText(f" {v} % "), self.redraw()))
         tb.addWidget(s)
+        tb.addWidget(pct)
         tb.addSeparator()
         cb = QtWidgets.QCheckBox("Prior map")
         cb.toggled.connect(lambda on: (self.act_prior.setChecked(on), self.toggle_prior()))
@@ -419,6 +427,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if s is not None and s.active is not None and QtCore.Qt.Key_1 <= key <= QtCore.Qt.Key_5:
             s.set_class(s.active, CLICKABLE[key - QtCore.Qt.Key_1])
             self.refresh()
+        elif s is not None and s.active is not None and key == QtCore.Qt.Key_0:
+            s.set_class(s.active, 0)
+            self.status(f"Object #{s.active + 1} marked as Other (cut out of what is behind it)")
+            self.refresh()
         else:
             super().keyPressEvent(e)
 
@@ -474,9 +486,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh(self):
         s = self.session
         self.class_list.clear()
-        counts = s.counts() if s else {c: 0 for c in CLICKABLE}
-        for n, c in enumerate(CLICKABLE, start=1):
-            it = QtWidgets.QListWidgetItem(swatch(c), f"{n}  {CLASS_NAMES[c]:<14} {counts[c]:>4}")
+        counts = s.counts() if s else {c: 0 for c in list(CLICKABLE) + [0]}
+        for key, c in [(n, c) for n, c in enumerate(CLICKABLE, start=1)] + [(0, 0)]:
+            it = QtWidgets.QListWidgetItem(swatch(c), f"{key}  {CLASS_NAMES[c]:<14} {counts[c]:>4}")
             it.setData(QtCore.Qt.UserRole, c)
             self.class_list.addItem(it)
         self.object_list.blockSignals(True)

@@ -47,7 +47,8 @@ def test_pending_then_classified_paint_order_undo_and_export(tmp_path):
     h, w = 60, 80
     s = Session(np.zeros((h, w, 3), np.uint8), FakeClicker(h, w), head=None)
     a = s.new_object(20, 20)                       # before the prior: class pending
-    assert s.objects[a].pending
+    assert s.objects[a].pending and s.objects[a].label is None
+    assert s.label_map()[20, 20] == 0              # pending objects are not painted
     prior = make_prior(h, w, 1)
     prior[15:26, 15:26, :] = 0
     prior[15:26, 15:26, 4] = 1.0                   # a "window" around (20, 20)
@@ -67,5 +68,13 @@ def test_pending_then_classified_paint_order_undo_and_export(tmp_path):
     assert lm[20, 20] == 4 and lm[30, 60] == 3 and lm[0, 0] == 0
     png, js = s.export(tmp_path / "m.png", source_name="x.png")
     assert png.exists() and js.exists()
+    # a "tree" in front of the building: marked Other, it cuts its area out
+    t = s.new_object(62, 32)
+    s.set_class(t, 0)
+    lm = s.label_map()
+    assert lm[32, 62] == 0 and s.other_mask()[32, 62] and lm[20, 20] == 4
+    assert s.counts()[0] == 1
+    # right-click cycling ends with Other
+    assert s.objects[b].ranking[-1] == 0
     s.delete(a)
-    assert len(s.objects) == 1
+    assert len(s.objects) == 2
