@@ -8,25 +8,8 @@ switching images and on quitting); priors are pre-computed in the background for
 the next images; Page Up / Page Down = previous / next image; File > Export CVAT XML
 writes the whole folder in CVAT for images 1.1 format.
 
-Mouse (on the image):
-    left click            new object (SAM mask; class and mask chosen by the class head)
-    right click / Ctrl+click   next class for the object under the cursor
-    Shift+click           grow the active object (positive refinement)
-    Alt(Option)+click     shrink the active object (negative refinement)
-    draw a loop           the object inside it (SAM shapes it, the loop chooses)
-    Cmd(Ctrl) + loop      every object the prior finds inside the loop
-    draw a line           one object along the line (a scribble over it)
-    Shift / Option + loop      add / cut exactly the drawn area (active object)
-    Shift / Option + line      grow / shrink the active object along the line
-On pre-label objects (and after exact edits) Shift / Option clicks are local: only
-the piece under the cursor is added / removed. Option+click works on the object
-under the cursor.
-Objects list: select several (Shift / Cmd+click), right click for Delete / Set
-class, Delete or Backspace removes the selected objects.
-    wheel                 zoom, middle button / Space+drag: pan
-Keys: 1-5 set the class of the active object, 0 marks it as Other (e.g. a tree in
-front of the building: it is cut out of what is behind), Delete/Backspace removes
-it, Ctrl+Z undo.
+Shortcuts: see shortcuts_text() (Help > Shortcuts); they use Cmd/Option on macOS and
+Ctrl/Alt on Windows and Linux (Qt maps Ctrl to Cmd on a Mac).
 """
 import sys
 import threading
@@ -43,6 +26,37 @@ from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE
 
 TITLE = "Damage Annotator"
+MAC = sys.platform == "darwin"
+CTRL = "Cmd" if MAC else "Ctrl"      # Qt's ControlModifier is the Cmd key on a Mac
+ALT = "Option" if MAC else "Alt"
+
+
+def shortcuts_text():
+    return f"""Mouse on the image
+  left click                new object (SAM mask; class from the class head)
+  right click / {CTRL}+click   next class of the object under the cursor
+  Shift+click               grow the selected object
+  {ALT}+click / Shift+right click   shrink (cut a piece from) the object under the cursor
+  draw a loop               the object inside it
+  {CTRL}+loop                  every object the prior finds inside
+  draw a line               one object along the line
+  Shift / {ALT} + loop        add / cut exactly the drawn area
+  Shift / {ALT} + line        grow / shrink the selected object along the line
+
+View
+  wheel / two-finger swipe  scroll (Shift+wheel: left-right)
+  {CTRL}+wheel, pinch         zoom at the cursor
+  {CTRL}+plus / minus / 0     zoom in / out / 100 %;  F: fit to window
+  Space+drag, middle drag   pan;  P: show the prior map
+
+Keys
+  1-5   class of the selected objects, 0: Other (cut out of what is behind)
+  Backspace / Delete   delete the selected objects;  {CTRL}+Z undo
+  Page Up / Page Down, {CTRL}+Left / Right   previous / next image (folder)
+  {CTRL}+S save, {CTRL}+E export mask, {CTRL}+Shift+E export CVAT, {CTRL}+L pre-label
+
+On pre-label objects Shift/{ALT} clicks add/remove only the piece under the cursor.
+Linux: if the desktop uses {ALT}+drag to move windows, use Shift+right click to shrink."""
 GRAY, DARK, NAVY = "#c0c0c0", "#808080", "#000080"
 
 
@@ -220,7 +234,10 @@ class Canvas(QtWidgets.QGraphicsView):
         self.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self._pan = None
+        self._space = False              # Space held: left drag pans
         self._stroke = None              # image points of the stroke being drawn
         self._press = None               # (screen pos, modifiers) of the left press
         self._path = self.scene().addPath(QtGui.QPainterPath())
@@ -234,9 +251,72 @@ class Canvas(QtWidgets.QGraphicsView):
         if fit:
             self.fitInView(self.item, QtCore.Qt.KeepAspectRatio)
 
+    # -- view: scrolling and zooming (same on macOS, Windows, Linux) ------------
+    MIN_ZOOM, MAX_ZOOM = 0.05, 40.0
+
+    def zoom(self, factor, at_cursor=True):
+        z = self.transform().m11()
+        factor = min(max(factor, self.MIN_ZOOM / z), self.MAX_ZOOM / z)
+        if not at_cursor:
+            self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorViewCenter)
+        self.scale(factor, factor)
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
+
+    def zoom_reset(self):
+        self.zoom(1.0 / self.transform().m11(), at_cursor=False)
+
+    def fit(self):
+        self.fitInView(self.item, QtCore.Qt.KeepAspectRatio)
+
     def wheelEvent(self, e):
-        f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
-        self.scale(f, f)
+        """Wheel / two-finger swipe scrolls; Ctrl(Cmd)+wheel zooms at the cursor
+        (a Windows/Linux touchpad pinch also arrives as Ctrl+wheel)."""
+        ad, pd = e.angleDelta(), e.pixelDelta()
+        if e.modifiers() & QtCore.Qt.ControlModifier:
+            d = ad.y() or ad.x()
+            if d:
+                self.zoom(1.0015 ** d)        # one wheel notch (120) = x1.2
+            return
+        if not pd.isNull():                   # trackpad: exact pixels
+            dx, dy = pd.x(), pd.y()
+        else:                                 # mouse wheel: 120 per notch
+            dx, dy = ad.x() * 0.5, ad.y() * 0.5
+        if e.modifiers() & QtCore.Qt.ShiftModifier and dx == 0:
+            dx, dy = dy, 0                    # Shift+wheel: left-right (macOS already swaps)
+        h, v = self.horizontalScrollBar(), self.verticalScrollBar()
+        h.setValue(h.value() - int(dx))
+        v.setValue(v.value() - int(dy))
+
+    def viewportEvent(self, e):
+        # macOS trackpad pinch / smart zoom (Windows/Linux pinch comes as Ctrl+wheel)
+        if e.type() == QtCore.QEvent.NativeGesture:
+            g = e.gestureType()
+            if g == QtCore.Qt.ZoomNativeGesture:
+                self.zoom(1.0 + e.value())
+                return True
+            if g == QtCore.Qt.SmartZoomNativeGesture:
+                self.fit()
+                return True
+        return super().viewportEvent(e)
+
+    def enterEvent(self, e):
+        self.setFocus()                       # so Space (pan) reaches the canvas
+        super().enterEvent(e)
+
+    def keyPressEvent(self, e):
+        if e.key() == QtCore.Qt.Key_Space:
+            if not e.isAutoRepeat():
+                self._space = True
+                self.viewport().setCursor(QtCore.Qt.OpenHandCursor)
+            return
+        e.ignore()                            # everything else goes to the window
+
+    def keyReleaseEvent(self, e):
+        if e.key() == QtCore.Qt.Key_Space and not e.isAutoRepeat():
+            self._space = False
+            self.viewport().unsetCursor()
+            return
+        e.ignore()
 
     def _image_xy(self, e):
         p = self.mapToScene(e.position().toPoint())
@@ -247,9 +327,9 @@ class Canvas(QtWidgets.QGraphicsView):
         return 0 <= x < r.width() and 0 <= y < r.height()
 
     def mousePressEvent(self, e):
-        if e.button() == QtCore.Qt.MiddleButton or (e.button() == QtCore.Qt.LeftButton and
-                                                     QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.MetaModifier):
+        if e.button() == QtCore.Qt.MiddleButton or (e.button() == QtCore.Qt.LeftButton and self._space):
             self._pan = e.position()
+            self.viewport().setCursor(QtCore.Qt.ClosedHandCursor)
             return
         x, y = self._image_xy(e)
         if not self._inside(x, y):
@@ -303,7 +383,13 @@ class Canvas(QtWidgets.QGraphicsView):
         self._path.setPath(path)
 
     def mouseReleaseEvent(self, e):
-        self._pan = None
+        if self._pan is not None:
+            self._pan = None
+            if self._space:
+                self.viewport().setCursor(QtCore.Qt.OpenHandCursor)
+            else:
+                self.viewport().unsetCursor()
+            return
         if self._stroke is None:
             return
         from dmgseg.tool.lasso import is_loop
@@ -429,11 +515,12 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(b)
         bl2.addLayout(row)
         v.addWidget(box2, 1)
-        hint = QtWidgets.QLabel("Left click: new object\nRight click: next class\nShift+click: grow\n"
-                                "Option+click: shrink / cut piece\nLoop: the object inside\n"
-                                "Cmd+loop: all objects inside\nLine: object along it\n"
-                                "Shift/Option+loop: add/cut area\n1-5: set class, 0: Other\n"
-                                "⌫ (Backspace): delete selected")
+        hint = QtWidgets.QLabel(f"Left click: new object\nRight click: next class\nShift+click: grow\n"
+                                f"{ALT}+click: shrink / cut piece\nLoop: the object inside\n"
+                                f"{CTRL}+loop: all objects inside\nLine: object along it\n"
+                                f"Shift/{ALT}+loop: add/cut area\n1-5: set class, 0: Other\n"
+                                f"Backspace: delete selected\n{CTRL}+wheel / pinch: zoom\n"
+                                f"Space+drag: pan")
         hint.setFrameShape(QtWidgets.QFrame.Panel)
         hint.setFrameShadow(QtWidgets.QFrame.Sunken)
         v.addWidget(hint)
@@ -460,8 +547,11 @@ class MainWindow(QtWidgets.QMainWindow):
         f.addAction("&Export Mask...", self.export_dialog, "Ctrl+E")
         f.addAction("Export &CVAT XML (folder)...", self.export_cvat_dialog, "Ctrl+Shift+E")
         f.addSeparator()
-        f.addAction("&Previous Image", lambda: self.step(-1), QtGui.QKeySequence(QtCore.Qt.Key_PageUp))
-        f.addAction("&Next Image", lambda: self.step(1), QtGui.QKeySequence(QtCore.Qt.Key_PageDown))
+        # Page Up/Down are missing on Mac laptops: Cmd+Left/Right as well
+        a = f.addAction("&Previous Image", lambda: self.step(-1))
+        a.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_PageUp), QtGui.QKeySequence("Ctrl+Left")])
+        a = f.addAction("&Next Image", lambda: self.step(1))
+        a.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_PageDown), QtGui.QKeySequence("Ctrl+Right")])
         f.addSeparator()
         f.addAction("E&xit", self.close, QtGui.QKeySequence.Quit)
         e = mb.addMenu("&Edit")
@@ -470,13 +560,17 @@ class MainWindow(QtWidgets.QMainWindow):
         # On a Mac keyboard the big delete key is Backspace; Delete is Fn+Backspace.
         act_del.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_Backspace), QtGui.QKeySequence.Delete])
         vmenu = mb.addMenu("&View")
-        vmenu.addAction("Fit to &Window", lambda: self.canvas.fitInView(self.canvas.item, QtCore.Qt.KeepAspectRatio), "F")
+        vmenu.addAction("Fit to &Window", self.canvas.fit, "F")
+        a = vmenu.addAction("Zoom &In", lambda: self.canvas.zoom(1.25, at_cursor=False))
+        a.setShortcuts([QtGui.QKeySequence.ZoomIn, QtGui.QKeySequence("Ctrl+=")])
+        vmenu.addAction("Zoom &Out", lambda: self.canvas.zoom(0.8, at_cursor=False), QtGui.QKeySequence.ZoomOut)
+        vmenu.addAction("&Actual Size (100 %)", self.canvas.zoom_reset, "Ctrl+0")
         self.act_prior = vmenu.addAction("Show &Prior Map", self.toggle_prior, "P")
         self.act_prior.setCheckable(True)
         t = mb.addMenu("&Tools")
         t.addAction("&Auto Pre-label", self.run_prelabel, "Ctrl+L")
         h = mb.addMenu("&Help")
-        h.addAction("&Shortcuts", lambda: QtWidgets.QMessageBox.information(self, "Shortcuts", __doc__.split("Mouse")[1]))
+        h.addAction("&Shortcuts", self.show_shortcuts, QtGui.QKeySequence.HelpContents)
         h.addAction("&About", lambda: QtWidgets.QMessageBox.about(
             self, "About", f"<b>{TITLE}</b><br>SAM 2.1 + DINOv2 prior + class head.<br>Lab work, KNU 2026."))
 
@@ -737,8 +831,21 @@ class MainWindow(QtWidgets.QMainWindow):
         if s is None:
             return
         t0 = time.time()
-        right = button == QtCore.Qt.RightButton or (button == QtCore.Qt.LeftButton and mods & QtCore.Qt.ControlModifier)
-        if right:
+        # right click; Ctrl(Cmd)+click and, on a Mac, Control+click (Qt: Meta) do the same
+        right = button == QtCore.Qt.RightButton or (
+            button == QtCore.Qt.LeftButton and mods & (QtCore.Qt.ControlModifier | QtCore.Qt.MetaModifier))
+        shrink = mods & QtCore.Qt.AltModifier or (right and mods & QtCore.Qt.ShiftModifier)
+        if shrink:
+            # the active object if the click is on it, else the object under the cursor
+            i = s.active if s.active is not None and s.objects[s.active].mask[y, x] else s.object_at(x, y)
+            if i is None:
+                self.status(f"{ALT}+click: no object here")
+                return
+            local = not s.objects[i].sam_valid
+            s.refine(x, y, False, i)
+            self.status(f"Cut the piece under the cursor from object #{i + 1}" if local
+                        else f"Shrank object #{i + 1}")
+        elif right:
             i = s.object_at(x, y)
             if i is None:
                 self.status("Right click: no object here")
@@ -752,16 +859,6 @@ class MainWindow(QtWidgets.QMainWindow):
             local = not s.objects[s.active].sam_valid
             s.refine(x, y, True)
             self.status("Added the piece under the cursor" if local else "Grew the active object")
-        elif mods & QtCore.Qt.AltModifier:
-            # the active object if the click is on it, else the object under the cursor
-            i = s.active if s.active is not None and s.objects[s.active].mask[y, x] else s.object_at(x, y)
-            if i is None:
-                self.status("Option+click: no object here")
-                return
-            local = not s.objects[i].sam_valid
-            s.refine(x, y, False, i)
-            self.status(f"Cut the piece under the cursor from object #{i + 1}" if local
-                        else f"Shrank object #{i + 1}")
         else:
             i = s.new_object(x, y)
             o = s.objects[i]
@@ -841,6 +938,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.session:
             self.session.undo()
             self.refresh()
+
+    def show_shortcuts(self):
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Shortcuts")
+        box.setText(f"<pre>{shortcuts_text()}</pre>")
+        box.exec()
 
     def selected_objects(self):
         """Rows selected in the Objects list, or the active object."""

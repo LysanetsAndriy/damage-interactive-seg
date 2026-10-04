@@ -39,6 +39,13 @@ the DINOv2 prior is cached there and pre-computed for the next images in the
 background; Page Up/Down switch images; File > Export CVAT XML exports the folder
 (masks: exact; polygons: outlines) for CVAT or the training parser.
 
+View (same on all systems; Cmd/Option on macOS = Ctrl/Alt on Windows and Linux):
+wheel or two-finger swipe scrolls (Shift+wheel: sideways), **Ctrl/Cmd+wheel** or a
+pinch zooms at the cursor, Ctrl/Cmd +/-/0 zoom by keyboard, F fits, Space+drag or the
+middle button pans. Previous/next image: Page Up/Down or Ctrl/Cmd+Left/Right.
+Shrink: Alt/Option+click or Shift+right click (for Linux desktops that use Alt+drag).
+Help > Shortcuts lists everything with the right key names for the system.
+
 Drawing (left-drag on the image; the stroke is yellow / cyan / green / red while drawing):
 - **loop** around a thing: that object. SAM proposes shapes (loop box, points inside,
   "not this" points outside) and the one that matches the loop best wins.
