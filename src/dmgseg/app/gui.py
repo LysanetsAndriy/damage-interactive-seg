@@ -22,6 +22,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from dmgseg.app.engine import COLORS, ClassHead, Session
 from dmgseg.app.project import FolderProject, export_cvat
+from dmgseg.app.slots import SlotMachine
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE
 
@@ -453,7 +454,7 @@ class MainWindow(QtWidgets.QMainWindow):
         split.addWidget(self.canvas)
         split.addWidget(self._side_panel())
         split.setStretchFactor(1, 1)
-        split.setSizes([200, 900, 260])
+        split.setSizes([215, 885, 260])
         lay.addWidget(split, 1)
         self.setCentralWidget(central)
 
@@ -483,7 +484,19 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addWidget(legend)
         box.setVisible(False)
         self.images_box = box
-        return box
+        # a toy slot machine for breaks (View > Slot Machine hides it)
+        left = QtWidgets.QWidget()
+        lv = QtWidgets.QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.addWidget(box, 1)
+        self.slots_box = QtWidgets.QGroupBox("Lucky Labels")
+        sl = QtWidgets.QVBoxLayout(self.slots_box)
+        sl.setContentsMargins(4, 4, 4, 4)
+        self.slots = SlotMachine()
+        sl.addWidget(self.slots)
+        lv.addStretch(0)
+        lv.addWidget(self.slots_box)
+        return left
 
     def _side_panel(self):
         side = QtWidgets.QWidget()
@@ -561,6 +574,9 @@ class MainWindow(QtWidgets.QMainWindow):
         act_del.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_Backspace), QtGui.QKeySequence.Delete])
         vmenu = mb.addMenu("&View")
         vmenu.addAction("Fit to &Window", self.canvas.fit, "F")
+        a = vmenu.addAction("&Slot Machine", lambda: self.slots_box.setVisible(not self.slots_box.isVisible()))
+        a.setCheckable(True)
+        a.setChecked(True)
         a = vmenu.addAction("Zoom &In", lambda: self.canvas.zoom(1.25, at_cursor=False))
         a.setShortcuts([QtGui.QKeySequence.ZoomIn, QtGui.QKeySequence("Ctrl+=")])
         vmenu.addAction("Zoom &Out", lambda: self.canvas.zoom(0.8, at_cursor=False), QtGui.QKeySequence.ZoomOut)
