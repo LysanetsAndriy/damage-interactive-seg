@@ -260,3 +260,44 @@ def test_latest_user_class_decision_is_on_top(tmp_path):
     proj.save_state("a.png", st)
     export_cvat(proj, tmp_path / "x.xml")
     assert np.array_equal(semantic_mask(parse_annotations(tmp_path / "x.xml")[0]), lm)
+
+
+def test_objects_made_after_a_decision_show_on_top_of_it():
+    """User report: windows from the prior relabeled Building (with a loop + key 1),
+    then the real windows clicked afterwards must show over that Building."""
+    from dmgseg.app.engine import Obj
+    h, w = 40, 50
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    blob = np.zeros((h, w), bool); blob[10:30, 10:30] = True
+    s.objects = [Obj(mask=blob, ranking=[4, 1, 2, 3, 5, 0], auto=True, sam_valid=False, created=s._tick())]
+    loop = np.zeros((h, w), bool); loop[8:32, 8:32] = True
+    s.objects.append(Obj(mask=loop, ranking=[3, 1, 2, 4, 5, 0], created=s._tick()))
+    s.set_class(1, 1)                                   # the loop object is Building
+    assert s.label_map()[20, 20] == 1                   # covers the prior's window blob
+    win = np.zeros((h, w), bool); win[15:20, 15:20] = True
+    s.objects.append(Obj(mask=win, ranking=[4, 1, 2, 3, 5, 0], created=s._tick()))   # clicked later
+    lm = s.label_map()
+    assert lm[17, 17] == 4 and lm[25, 25] == 1          # the new window shows, the rest is Building
+    assert s.object_at(17, 17) == 2
+    big = np.zeros((h, w), bool); big[0:40, 0:50] = True
+    s.objects.append(Obj(mask=big, ranking=[1, 2, 3, 4, 5, 0], created=s._tick()))  # a later building click
+    assert s.label_map()[17, 17] == 4                   # class priority within the layer: window stays
+
+
+def test_old_saves_get_times_from_the_list_order():
+    from dmgseg.app.engine import Obj
+    h, w = 40, 50
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    blob = np.zeros((h, w), bool); blob[10:30, 10:30] = True
+    loop = np.zeros((h, w), bool); loop[8:32, 8:32] = True
+    win = np.zeros((h, w), bool); win[15:20, 15:20] = True
+    s.objects = [Obj(mask=blob, ranking=[4, 1, 2, 3, 5, 0], auto=True),
+                 Obj(mask=loop, ranking=[3, 1, 2, 4, 5, 0], manual=1),
+                 Obj(mask=win, ranking=[4, 1, 2, 3, 5, 0])]
+    st = s.to_state()
+    for d in st["objects"]:                     # as saved by the previous version
+        d.pop("created")
+        d["decided"] = 1 if d["manual"] is not None else None
+    s.load_state(st)
+    lm = s.label_map()
+    assert lm[17, 17] == 4 and lm[25, 25] == 1

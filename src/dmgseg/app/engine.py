@@ -34,24 +34,27 @@ PAINT_ORDER = list(CLICKABLE) + [OTHER]
 CYCLE_END = [OTHER]              # right-click cycling ends with "Other"
 
 
-def paint_key(o, i):
-    """Paint order (painted later = on top):
-    0. objects with an automatic class (pre-label blobs, click / loop / line objects
-       classified by the head), by class priority as in the dataset:
-       Building < Roof < Damage < Broken Window < Damaged roof;
-    1. objects whose class the USER chose (number key, menu, right click), in the
-       order of those decisions: the latest decision is on top. Pressing 1 on a
-       building paints all of it Building, over prior blobs too; pressing 4 on a
-       window afterwards brings that window back on top;
-    2. Other, on top of everything (it cuts its area out).
-    Objects still pending (no class yet) are not painted."""
-    if o.label is None:
-        return (-1, 0, 0, i)
-    if o.label == OTHER:
-        return (2, 0, 0, i)
-    if o.decided is not None or o.manual is not None:
-        return (1, 0, o.decided or 0, i)
-    return (0, PAINT_ORDER.index(o.label), 0, i)
+def paint_order(objects):
+    """Indices of the objects in painting order (painted later = on top).
+
+    Every object has a time: when the user last chose its class (number key, menu,
+    right click), else when it was created. Each class decision starts a new
+    layer: it covers everything older (pressing 1 on a building paints all of it
+    Building, over prior blobs too), while objects made afterwards (a window
+    clicked on that building) go into the new layer. Within a layer the dataset's
+    class priority holds: Building < Roof < Damage < Broken Window < Damaged roof.
+    Other is painted last (it cuts its area out); pending objects not at all."""
+    import bisect
+    decisions = sorted(o.decided for o in objects if o.decided is not None)
+
+    def key(i):
+        o = objects[i]
+        if o.label == OTHER:
+            return (1, 0, 0, i)
+        t = o.decided if o.decided is not None else (o.created or 0)
+        return (0, bisect.bisect_right(decisions, t), PAINT_ORDER.index(o.label), i)
+
+    return sorted((i for i in range(len(objects)) if objects[i].label is not None), key=key)
 COLORS = {0: (160, 160, 160), 1: (40, 170, 60), 2: (255, 165, 0), 3: (170, 50, 200),
           4: (30, 90, 255), 5: (230, 30, 30)}
 
@@ -74,7 +77,8 @@ class Obj:
     # Shift/Option click re-asks SAM for the whole object. Otherwise (pre-label
     # blobs, exact edits, clipped or reloaded masks) clicks edit the mask locally.
     sam_valid: bool = True
-    decided: int | None = None        # order of the user's class decision (paint_key)
+    decided: int | None = None        # time of the user's last class decision (paint_order)
+    created: int = 0                  # time the object was made (paint_order)
 
     @property
     def label(self):
@@ -91,6 +95,16 @@ def mask_to_logits(mask, size=256, scale=10.0):
     so SAM refinements after an exact edit start from the edited shape."""
     m = cv2.resize(mask.astype(np.float32), (size, size), interpolation=cv2.INTER_AREA)
     return ((m - 0.5) * 2 * scale).astype(np.float32)
+
+
+def state_times(objs):
+    """(created, decided) per saved object. Saves made before objects had times:
+    the list order is the creation order, and a class decision is placed right
+    after its own object was made (make an object, then press a key)."""
+    if all("created" in d for d in objs):
+        return [(d["created"], d.get("decided")) for d in objs]
+    return [(2 * i + 2, None if d.get("decided") is None and d.get("manual") is None and not d.get("choice")
+             else 2 * i + 3) for i, d in enumerate(objs)]
 
 
 class ClassHead:
@@ -149,7 +163,7 @@ class Session:
         for p in _prelabel(self.prior, self.clicker, **kw):
             o = Obj(mask=p.mask, ranking=[], sam_score=p.sam_score, cand_type=REFINED, click_no=1,
                     points=p.points, labels=p.labels, logits=mask_to_logits(p.mask), auto=True,
-                    sam_valid=False)
+                    sam_valid=False, created=self._tick())
             if use_head and self.head is not None:
                 o.ranking = self._ranking(o)
             else:
@@ -174,7 +188,8 @@ class Session:
         hits = [i for i, o in enumerate(self.objects) if o.mask[y, x] and o.label is not None]
         if not hits:
             return None
-        return max(hits, key=lambda i: paint_key(self.objects[i], i))
+        rank = {i: r for r, i in enumerate(paint_order(self.objects))}
+        return max(hits, key=lambda i: rank[i])
 
     def new_object(self, x, y):
         """Left click: SAM's 3 candidates; the head picks the mask and the class."""
@@ -195,7 +210,8 @@ class Session:
             pending = self.prior is None
         mask = c.choose_index(k)
         o = Obj(mask=mask, ranking=ranking, sam_score=float(scores[k]), cand_type=k, click_no=1,
-                points=list(c.points), labels=list(c.labels), logits=c.logits.copy(), pending=pending)
+                points=list(c.points), labels=list(c.labels), logits=c.logits.copy(), pending=pending,
+                created=self._tick())
         self.objects.append(o)
         self.active = len(self.objects) - 1
         return self.active
@@ -224,7 +240,8 @@ class Session:
     # -- drawing -------------------------------------------------------------
     def _add(self, mask, prior_class, sam_score, points, labels, click_no=1, sam_valid=False):
         o = Obj(mask=mask, ranking=[], sam_score=sam_score, cand_type=REFINED, click_no=click_no,
-                points=list(points), labels=list(labels), logits=mask_to_logits(mask), sam_valid=sam_valid)
+                points=list(points), labels=list(labels), logits=mask_to_logits(mask), sam_valid=sam_valid,
+                created=self._tick())
         if prior_class is not None:
             o.ranking = [prior_class] + [c for c in CLICKABLE if c != prior_class] + CYCLE_END
         else:
@@ -273,7 +290,7 @@ class Session:
         if index is None:
             mask = c.prompt(pts, [1] * len(pts))
             o = Obj(mask=mask, ranking=[], sam_score=c.last_score, cand_type=REFINED, click_no=2,
-                    points=list(c.points), labels=list(c.labels), logits=c.logits.copy())
+                    points=list(c.points), labels=list(c.labels), logits=c.logits.copy(), created=self._tick())
             o.ranking = self._ranking(o)
             o.pending = self.prior is None
             self.objects.append(o)
@@ -354,8 +371,12 @@ class Session:
         self.objects = [o for i, o in enumerate(self.objects) if i not in drop]
         self.active = None
 
+    def _tick(self):
+        """The session clock: one step per creation / class decision."""
+        return 1 + max((max(x.decided or 0, x.created) for x in self.objects), default=0)
+
     def _decide(self, o):
-        o.decided = 1 + max((x.decided or 0 for x in self.objects), default=0)
+        o.decided = self._tick()
 
     def next_class(self, index):
         """Right click on an object: the next class in its ranking."""
@@ -403,14 +424,15 @@ class Session:
                 "manual": None if o.manual is None else int(o.manual), "sam_score": float(o.sam_score),
                 "cand_type": int(o.cand_type), "click_no": int(o.click_no),
                 "points": [[float(a), float(b)] for a, b in o.points], "labels": list(map(int, o.labels)),
-                "pending": bool(o.pending), "auto": bool(o.auto), "decided": o.decided})
+                "pending": bool(o.pending), "auto": bool(o.auto), "decided": o.decided,
+                "created": int(o.created)})
         return {"version": 1, "width": self.w, "height": self.h, "prelabeled": self.prelabeled, "objects": objs}
 
     def load_state(self, state):
         if (state["width"], state["height"]) != (self.w, self.h):
             raise ValueError("saved annotation does not match the image size")
         self.objects = []
-        for d in state["objects"]:
+        for d, (created, decided) in zip(state["objects"], state_times(state["objects"])):
             x0, y0, x1, y1 = d["box"]
             mask = np.zeros((self.h, self.w), bool)
             n = (y1 - y0) * (x1 - x0)
@@ -420,16 +442,16 @@ class Session:
                                     sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
                                     points=[tuple(p) for p in d["points"]], labels=d["labels"],
                                     logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"],
-                                    decided=d.get("decided"),
+                                    decided=decided, created=created,
                                     sam_valid=False))
         self.prelabeled = state.get("prelabeled", False)
         self.active, self._undo = None, []
 
     # -- output --------------------------------------------------------------
     def label_map(self):
-        """(H, W) class ids; objects painted in paint_key order (Other = 0)."""
+        """(H, W) class ids; objects painted in paint_order (Other = 0)."""
         out = np.zeros((self.h, self.w), np.uint8)
-        order = sorted(range(len(self.objects)), key=lambda i: paint_key(self.objects[i], i))
+        order = paint_order(self.objects)
         for i in order:
             o = self.objects[i]
             if o.label is not None:
