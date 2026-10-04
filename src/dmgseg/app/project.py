@@ -84,7 +84,7 @@ def mask_polygons(mask, min_points=3):
 
 def visible_objects_from_state(state):
     """[(class, visible mask)] from a saved state, without SAM (rebuilds a Session-like map)."""
-    from dmgseg.app.engine import Obj, PAINT_ORDER
+    from dmgseg.app.engine import Obj, paint_key
     h, w = state["height"], state["width"]
     import base64
     objs = []
@@ -96,8 +96,7 @@ def visible_objects_from_state(state):
         m[y0:y1, x0:x1] = np.unpackbits(bits)[:n].reshape(y1 - y0, x1 - x0).astype(bool)
         objs.append(Obj(mask=m, ranking=d["ranking"], choice=d["choice"], manual=d["manual"], pending=d["pending"]))
     lm = np.zeros((h, w), np.uint8)
-    order = sorted(range(len(objs)), key=lambda i: (PAINT_ORDER.index(objs[i].label)
-                                                    if objs[i].label is not None else -1, i))
+    order = sorted(range(len(objs)), key=lambda i: paint_key(objs[i], i))
     for i in order:
         if objs[i].label is not None:
             lm[objs[i].mask] = objs[i].label

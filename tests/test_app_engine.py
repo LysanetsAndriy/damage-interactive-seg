@@ -221,3 +221,32 @@ def test_single_loop_local_edits_and_multi_delete():
     assert s.objects == []
     s.undo()
     assert len(s.objects) == 2
+
+
+def test_user_class_beats_automatic_window(tmp_path):
+    """A Damage object the user sets over an automatic Broken Window blob shows as
+    Damage (also in the CVAT export); a user-confirmed Building does not hide it."""
+    from dmgseg.app.engine import Obj
+    from dmgseg.app.project import FolderProject, export_cvat
+    from dmgseg.data.cvat import parse_annotations, semantic_mask
+    from PIL import Image
+    h, w = 40, 50
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    win = np.zeros((h, w), bool); win[10:20, 10:20] = True
+    dmg = np.zeros((h, w), bool); dmg[5:25, 5:25] = True
+    bld = np.zeros((h, w), bool); bld[0:35, 0:45] = True
+    s.objects = [Obj(mask=win, ranking=[4, 1, 2, 3, 5, 0], auto=True, sam_valid=False),
+                 Obj(mask=bld, ranking=[1, 2, 3, 4, 5, 0]),
+                 Obj(mask=dmg, ranking=[4, 3, 1, 2, 5, 0])]
+    s.set_classes([1], 1)                     # user confirms the building
+    assert s.label_map()[15, 15] == 4         # the window still shows
+    s.set_class(2, 3)                         # user: the bigger object is Damage
+    lm = s.label_map()
+    assert lm[15, 15] == 3 and lm[30, 30] == 1
+    assert s.object_at(15, 15) == 2
+    # the export reproduces it
+    Image.fromarray(np.zeros((h, w, 3), np.uint8)).save(tmp_path / "a.png")
+    proj = FolderProject(tmp_path)
+    proj.save_state("a.png", s.to_state())
+    export_cvat(proj, tmp_path / "x.xml")
+    assert np.array_equal(semantic_mask(parse_annotations(tmp_path / "x.xml")[0]), lm)

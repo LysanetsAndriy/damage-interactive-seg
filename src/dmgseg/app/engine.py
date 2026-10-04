@@ -32,6 +32,26 @@ OTHER = 0
 # their area out of whatever is behind them; unlabeled pixels are Other as well.
 PAINT_ORDER = list(CLICKABLE) + [OTHER]
 CYCLE_END = [OTHER]              # right-click cycling ends with "Other"
+CONTENT = (3, 4, 5)              # Damage, Broken Window, Damaged roof (sit on buildings/roofs)
+
+
+def paint_key(o, i):
+    """Paint order (painted later = on top):
+    0. automatically classified objects, by class priority (as in the dataset:
+       Building < Roof < Damage < Broken Window < Damaged roof);
+    1. objects whose class the USER chose (number key, menu or right click), if it
+       is a content class: the user's decision beats the automatic ones, e.g. a
+       Damage object the user made over a window blob from the prior shows as
+       Damage. (Building / Roof chosen by the user stay below, so confirming a
+       building never hides the windows and damage on it);
+    2. Other, on top of everything (it cuts its area out).
+    Objects still pending (no class yet) are not painted."""
+    if o.label is None:
+        return (-1, 0, i)
+    if o.label == OTHER:
+        return (2, 0, i)
+    user = o.manual is not None or o.choice > 0
+    return (1 if user and o.label in CONTENT else 0, PAINT_ORDER.index(o.label), i)
 COLORS = {0: (160, 160, 160), 1: (40, 170, 60), 2: (255, 165, 0), 3: (170, 50, 200),
           4: (30, 90, 255), 5: (230, 30, 30)}
 
@@ -153,7 +173,7 @@ class Session:
         hits = [i for i, o in enumerate(self.objects) if o.mask[y, x] and o.label is not None]
         if not hits:
             return None
-        return max(hits, key=lambda i: (PAINT_ORDER.index(self.objects[i].label), i))
+        return max(hits, key=lambda i: paint_key(self.objects[i], i))
 
     def new_object(self, x, y):
         """Left click: SAM's 3 candidates; the head picks the mask and the class."""
@@ -399,11 +419,9 @@ class Session:
 
     # -- output --------------------------------------------------------------
     def label_map(self):
-        """(H, W) class ids; objects painted in class-priority order (Other = 0)."""
+        """(H, W) class ids; objects painted in paint_key order (Other = 0)."""
         out = np.zeros((self.h, self.w), np.uint8)
-        order = sorted(range(len(self.objects)),
-                       key=lambda i: (PAINT_ORDER.index(self.objects[i].label)
-                                      if self.objects[i].label is not None else -1, i))
+        order = sorted(range(len(self.objects)), key=lambda i: paint_key(self.objects[i], i))
         for i in order:
             o = self.objects[i]
             if o.label is not None:
