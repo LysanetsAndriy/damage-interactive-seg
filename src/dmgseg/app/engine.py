@@ -80,6 +80,29 @@ class Obj:
     decided: int | None = None        # time of the user's last class decision (paint_order)
     created: int = 0                  # time the object was made (paint_order)
 
+    def _geom(self):
+        """(y0, y1, x0, x1, area) of the mask, cached until the mask array is
+        replaced (masks are never changed in place)."""
+        c = self.__dict__.get("_geom_cache")
+        if c is None or c[0] is not self.mask:
+            if self.mask.any():
+                rows, cols = np.flatnonzero(self.mask.any(1)), np.flatnonzero(self.mask.any(0))
+                y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+                area = int(self.mask[y0:y1, x0:x1].sum())
+            else:
+                y0 = y1 = x0 = x1 = area = 0
+            c = (self.mask, (y0, y1, x0, x1, area))
+            self.__dict__["_geom_cache"] = c
+        return c[1]
+
+    @property
+    def box(self):
+        return self._geom()[:4]
+
+    @property
+    def area(self):
+        return self._geom()[4]
+
     @property
     def label(self):
         """Current class; None while the class is still pending (not painted yet)."""
@@ -107,6 +130,22 @@ def state_times(objs):
              else 2 * i + 3) for i, d in enumerate(objs)]
 
 
+def blend_labels(image, lm, alpha, other=None):
+    """The photo with the class colors blended in; `other` (pixels the user marked
+    as Other) is shown hatched gray. uint8 OpenCV blending (fast on big images)."""
+    lut = np.array([COLORS[c] for c in range(6)], np.uint8)
+    image = np.ascontiguousarray(image)
+    blended = cv2.addWeighted(image, 1 - alpha, lut[lm], alpha, 0)
+    out = image.copy()
+    cv2.copyTo(blended, (lm > 0).astype(np.uint8), out)
+    if other is not None and other.any():
+        ys, xs = np.nonzero(other)
+        stripes = ((xs + ys) // 6) % 2 == 0          # hatched gray = marked as Other
+        a = np.where(stripes, alpha, alpha / 2)[:, None]
+        out[ys, xs] = ((1 - a) * out[ys, xs] + a * lut[OTHER]).astype(np.uint8)
+    return out
+
+
 class ClassHead:
     """Head A (MLP on description cards)."""
 
@@ -121,7 +160,8 @@ class ClassHead:
 
 
 class Session:
-    def __init__(self, image, clicker, head=None):
+    def __init__(self, image, clicker, head=None, features=None):
+        """features: SAM features of this image computed earlier (instant start)."""
         self.image = np.asarray(image)
         self.h, self.w = self.image.shape[:2]
         self.clicker = clicker
@@ -131,7 +171,10 @@ class Session:
         self.active: int | None = None
         self._undo: list = []
         self.prelabeled = False          # the automatic draft was made (do not redo it)
-        clicker.set_image(self.image)
+        if features is not None:
+            clicker.set_features(features)
+        else:
+            clicker.set_image(self.image)
         self.embed = clicker.image_embedding
 
     # -- prior -------------------------------------------------------------
@@ -152,18 +195,24 @@ class Session:
         return [CLICKABLE[i] for i in np.argsort(-probs[0])] + CYCLE_END
 
     # -- automatic first draft ------------------------------------------------
-    def prelabel(self, use_head=False, **kw):
+    def prelabel(self, use_head=False, clicker=None, **kw):
         """Add objects for the prior's blobs, snapped to shapes by SAM. Returns how many.
         The class comes from the blob (head A was trained on click masks and is worse
-        on these); use_head=True switches to head A."""
+        on these); use_head=True switches to head A. The app computes the proposals
+        in a background thread (draft_proposals) and applies them with apply_prelabel."""
         if self.prior is None:
             return 0
+        return self.apply_prelabel(_prelabel(self.prior, clicker or self.clicker, **kw), use_head)
+
+    def apply_prelabel(self, proposals, use_head=False):
+        """Add pre-label proposals as automatic objects (one undo step). They are
+        the draft: oldest of all (created = 0), so any class decision covers them."""
         self._snapshot()
         n = 0
-        for p in _prelabel(self.prior, self.clicker, **kw):
+        for p in proposals:
             o = Obj(mask=p.mask, ranking=[], sam_score=p.sam_score, cand_type=REFINED, click_no=1,
-                    points=p.points, labels=p.labels, logits=mask_to_logits(p.mask), auto=True,
-                    sam_valid=False, created=self._tick())
+                    points=p.points, labels=p.labels, logits=None, auto=True,
+                    sam_valid=False, created=0)
             if use_head and self.head is not None:
                 o.ranking = self._ranking(o)
             else:
@@ -176,7 +225,7 @@ class Session:
 
     # -- actions -------------------------------------------------------------
     def _snapshot(self):
-        self._undo.append((copy.deepcopy(self.objects), self.active))
+        self._undo.append(([copy.copy(o) for o in self.objects], self.active))
         del self._undo[:-50]
 
     def undo(self):
@@ -413,10 +462,9 @@ class Session:
         """Everything needed to continue later (masks stored as packed bits in their box)."""
         objs = []
         for o in self.objects:
-            ys, xs = np.nonzero(o.mask)
-            if len(ys) == 0:
+            if o.area == 0:
                 continue
-            y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+            y0, y1, x0, x1 = o.box
             objs.append({
                 "box": [x0, y0, x1, y1],
                 "bits": base64.b64encode(np.packbits(o.mask[y0:y1, x0:x1]).tobytes()).decode("ascii"),
@@ -441,7 +489,7 @@ class Session:
             self.objects.append(Obj(mask=mask, ranking=d["ranking"], choice=d["choice"], manual=d["manual"],
                                     sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
                                     points=[tuple(p) for p in d["points"]], labels=d["labels"],
-                                    logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"],
+                                    logits=None, pending=d["pending"], auto=d["auto"],
                                     decided=decided, created=created,
                                     sam_valid=False))
         self.prelabeled = state.get("prelabeled", False)
@@ -451,24 +499,25 @@ class Session:
     def label_map(self):
         """(H, W) class ids; objects painted in paint_order (Other = 0)."""
         out = np.zeros((self.h, self.w), np.uint8)
-        order = paint_order(self.objects)
-        for i in order:
+        for i in paint_order(self.objects):
             o = self.objects[i]
-            if o.label is not None:
-                out[o.mask] = o.label
+            y0, y1, x0, x1 = o.box
+            if y1 > y0:
+                out[y0:y1, x0:x1][o.mask[y0:y1, x0:x1]] = o.label
         return out
 
     def counts(self):
         labels = [o.label for o in self.objects if o.label is not None]
         return {c: labels.count(c) for c in list(CLICKABLE) + [OTHER]}
 
-    def other_mask(self):
+    def other_mask(self, lm=None):
         """Pixels explicitly marked as Other (shown hatched gray in the overlay)."""
-        lm = self.label_map()
+        lm = self.label_map() if lm is None else lm
         m = np.zeros((self.h, self.w), bool)
         for o in self.objects:
-            if o.label == OTHER:
-                m |= o.mask
+            if o.label == OTHER and o.area:
+                y0, y1, x0, x1 = o.box
+                m[y0:y1, x0:x1] |= o.mask[y0:y1, x0:x1]
         return m & (lm == OTHER)
 
     def export(self, png_path, json_path=None, source_name=""):
@@ -517,24 +566,15 @@ class Session:
                 out.append((o.label, vis))
         return out
 
-    def overlay(self, alpha=0.45, active_outline=True):
+    def overlay(self, alpha=0.45, active_outline=True, lm=None):
         """RGB image with the class colors blended in (for display and tests)."""
-        lm = self.label_map()
-        out = self.image.astype(np.float32).copy()
-        for c in CLICKABLE:
-            m = lm == c
-            out[m] = (1 - alpha) * out[m] + alpha * np.array(COLORS[c])
-        other = self.other_mask()
-        if other.any():
-            yy, xx = np.mgrid[:self.h, :self.w]
-            stripes = ((xx + yy) // 6) % 2 == 0          # hatched gray = marked as Other
-            m = other & stripes
-            out[m] = (1 - alpha) * out[m] + alpha * np.array(COLORS[OTHER])
-            m = other & ~stripes
-            out[m] = (1 - alpha / 2) * out[m] + (alpha / 2) * np.array(COLORS[OTHER])
-        out = out.astype(np.uint8)
+        lm = self.label_map() if lm is None else lm
+        out = blend_labels(self.image, lm, alpha, self.other_mask(lm))
         if active_outline and self.active is not None and self.active < len(self.objects):
-            cnt, _ = cv2.findContours(self.objects[self.active].mask.astype(np.uint8), cv2.RETR_EXTERNAL,
-                                      cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(out, cnt, -1, (255, 255, 0), 2)
+            o = self.objects[self.active]
+            if o.area:
+                y0, y1, x0, x1 = o.box
+                cnt, _ = cv2.findContours(o.mask[y0:y1, x0:x1].astype(np.uint8), cv2.RETR_EXTERNAL,
+                                          cv2.CHAIN_APPROX_SIMPLE, offset=(x0, y0))
+                cv2.drawContours(out, cnt, -1, (255, 255, 0), 2)
         return out

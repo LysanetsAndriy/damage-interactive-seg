@@ -33,6 +33,24 @@ def wait(app, cond, timeout=900):
     app.processEvents()
 
 
+class Heartbeat:
+    """Longest gap between 20 ms timer ticks = longest time the window was frozen."""
+
+    def __init__(self):
+        self.last, self.worst = time.perf_counter(), 0.0
+        self.timer = QtCore.QTimer(interval=20, timeout=self.tick)
+        self.timer.start()
+
+    def tick(self):
+        now = time.perf_counter()
+        self.worst = max(self.worst, now - self.last)
+        self.last = now
+
+    def take(self):
+        w, self.worst = self.worst, 0.0
+        return w
+
+
 def main():
     folder = Path(tempfile.mkdtemp(prefix="annotator_"))
     names = load_split()["val"][:3]
@@ -44,21 +62,30 @@ def main():
     win.resize(1500, 880)
     win.show()
     wait(app, win.ready)
+    hb = Heartbeat()
+    hb.take()
     win.open_folder(str(folder))
     first = win.current_name
     wait(app, lambda: win.session is not None and win.session.prior is not None and win.session.prelabeled)
-    print(f"image 1 ({first}): draft with {len(win.session.objects)} objects")
+    print(f"image 1 ({first}): draft with {len(win.session.objects)} objects; "
+          f"longest freeze while opening + drafting: {hb.take():.2f} s")
     for x, y in [(200, 200), (300, 250)]:
         win.on_click(x, y, QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
     n1 = len(win.session.objects)
     lm1 = win.session.label_map().copy()
     # the second image's prior should be pre-computed while we were on the first
     wait(app, lambda: win.project.has_prior(win.project.images[1]))
+    t0 = time.perf_counter()
     win.step(1)
+    wait(app, lambda: win.session is not None)
+    print(f"switch to image 2: ready to click after {time.perf_counter() - t0:.2f} s")
     wait(app, lambda: win.session is not None and win.session.prior is not None and win.session.prelabeled)
     print(f"image 2: prior '{win.prior_label.text().strip()}', draft with {len(win.session.objects)} objects")
+    t0 = time.perf_counter()
     win.step(-1)
     wait(app, lambda: win.session is not None and win.current_name == first and win.session.prior is not None)
+    print(f"switch back to image 1: ready after {time.perf_counter() - t0:.2f} s; "
+          f"longest freeze so far: {hb.take():.2f} s")
     print(f"back to image 1: {len(win.session.objects)} objects restored (expected {n1}); "
           f"label map identical: {np.array_equal(win.session.label_map(), lm1)}")
     print("image list:", [win.image_list.item(i).text() for i in range(win.image_list.count())])

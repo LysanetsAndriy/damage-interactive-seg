@@ -14,14 +14,15 @@ Ctrl/Alt on Windows and Linux (Qt maps Ctrl to Cmd on a Mac).
 import sys
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from dmgseg.app.engine import COLORS, ClassHead, Session
-from dmgseg.app.project import FolderProject, export_cvat
+from dmgseg.app.engine import COLORS, ClassHead, Session, blend_labels
+from dmgseg.app.project import FolderProject, export_cvat, visible_objects_from_state
 from dmgseg.app.slots import SlotMachine
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE
@@ -124,8 +125,38 @@ class Worker(QtCore.QObject):
 class Models:
     """SAM, the class head and the semantic prior, loaded once in the background."""
 
+    FEATURE_CACHE = 6                    # images whose SAM features stay in memory (~16 MB each)
+
     def __init__(self):
         self.clicker = self.head = self.prior_model = self.embed_model = None
+        self._features = OrderedDict()   # image path -> SAM features
+        self._cache_lock = threading.Lock()
+        self._encode_lock = threading.Lock()
+        self.draft_lock = threading.Lock()
+
+    def cached_features(self, key):
+        with self._cache_lock:
+            f = self._features.get(key)
+            if f is not None:
+                self._features.move_to_end(key)
+            return f
+
+    def sam_features(self, key, image):
+        """SAM features of an image: from memory, or computed by the background
+        encoder (a twin of the user's clicker, so it never disturbs the user)."""
+        f = self.cached_features(key)
+        if f is not None:
+            return f
+        with self._encode_lock:
+            f = self.cached_features(key)          # another thread may have just made it
+            if f is None:
+                self.encoder.set_image(image)
+                f = self.encoder.features()
+                with self._cache_lock:
+                    self._features[key] = f
+                    while len(self._features) > self.FEATURE_CACHE:
+                        self._features.popitem(last=False)
+        return f
 
     def load(self, progress=None):
         from dmgseg import hub, paths
@@ -139,6 +170,8 @@ class Models:
         # fine-tuned SAM decoder (27 % fewer clicks to 85 % IoU); zero-shot if absent
         self.clicker = SamClicker("small", "cpu", decoder_weights=sam_ft if sam_ft.exists() else None)
         self.sam_finetuned = sam_ft.exists()
+        self.encoder = self.clicker.twin()   # reads images in the background
+        self.drafter = self.clicker.twin()   # makes the automatic draft in the background
         progress and progress(1, steps)
         # head A trained on masks of the same SAM the app uses
         name = "head_a_samft.pt" if self.sam_finetuned else "head_a.pt"
@@ -161,8 +194,11 @@ class Models:
 
 
 class PriorPrefetcher:
-    """One background thread that computes and caches priors for a folder: the
-    current image first, then the following images that have no cached prior yet.
+    """One background thread that prepares a folder, in this order:
+        1. the DINOv2 prior of the current image (cached on disk),
+        2. SAM's reading of the next and previous images (kept in memory), so
+           switching to them is instant,
+        3. the priors of the other images, starting after the current one.
     Callbacks run in this thread; the window forwards them to the GUI thread."""
 
     def __init__(self, models, project, on_done, on_progress):
@@ -189,24 +225,37 @@ class PriorPrefetcher:
         return sum(1 for n in self.project.images if not self.project.has_prior(n) and n not in self.failed)
 
     def _next(self):
+        """-> ("prior" | "sam", name) or None."""
         todo = lambda n: not self.project.has_prior(n) and n not in self.failed
-        if self.current and todo(self.current):
-            return self.current
         imgs = self.project.images
-        start = imgs.index(self.current) if self.current in imgs else 0
-        return next((n for n in imgs[start:] + imgs[:start] if todo(n)), None)
+        cur = self.current if self.current in imgs else None
+        if cur and todo(cur):
+            return "prior", cur
+        if cur:
+            i = imgs.index(cur)
+            for j in (i + 1, i - 1):
+                if 0 <= j < len(imgs) and self.models.cached_features(str(self.project.path(imgs[j]))) is None \
+                        and imgs[j] not in self.failed:
+                    return "sam", imgs[j]
+        start = imgs.index(cur) if cur else 0
+        n = next((n for n in imgs[start:] + imgs[:start] if todo(n)), None)
+        return ("prior", n) if n else None
 
     def _loop(self):
         while True:
             with self.cv:
                 if self.stopped:
                     return
-                name = self._next()
-                if name is None:
+                job = self._next()
+                if job is None:
                     self.cv.wait(5)
                     continue
+            kind, name = job
             try:
                 image = np.asarray(Image.open(self.project.path(name)).convert("RGB"))
+                if kind == "sam":
+                    self.models.sam_features(str(self.project.path(name)), image)
+                    continue
                 probs = self.models.compute_prior(image, progress=lambda d, t, n=name: self.on_progress(n, d, t))
                 self.project.save_prior(name, probs)
                 self.on_done(name, probs)
@@ -214,7 +263,8 @@ class PriorPrefetcher:
                 import traceback
                 traceback.print_exc()
                 self.failed.add(name)
-                self.on_done(name, None)
+                if kind == "prior":
+                    self.on_done(name, None)
 
 
 # ----------------------------------------------------------------- canvas
@@ -477,11 +527,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.image_list = QtWidgets.QListWidget()
         self.image_list.itemActivated.connect(lambda it: self.goto(it.data(QtCore.Qt.UserRole)))
         self.image_list.itemClicked.connect(lambda it: self.goto(it.data(QtCore.Qt.UserRole)))
+        self.image_list.setToolTip("✓ n: annotated (n objects)\n•  prior ready\n   not started")
         v.addWidget(self.image_list)
-        legend = QtWidgets.QLabel("✓ n: annotated (n objects)\n•  prior ready\n   not started")
-        legend.setFrameShape(QtWidgets.QFrame.Panel)
-        legend.setFrameShadow(QtWidgets.QFrame.Sunken)
-        v.addWidget(legend)
         box.setVisible(False)
         self.images_box = box
         # a toy slot machine for breaks (View > Slot Machine hides it)
@@ -721,32 +768,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.image_path = path
         self.session = None
         image = np.asarray(Image.open(path).convert("RGB"))
-        self.status(f"Reading image with SAM: {path.name}")
         self.caption.setText(f"  {TITLE} - {path.name}")
-        self.canvas.show_rgb(image, fit=True)
         self.progress.setValue(0)
+        state = self.project.load_state(name) if name else None
+        key = str(path)
+        cached = self.models.cached_features(key)
+        # show the saved labels at once; SAM is only needed for new clicks
+        if cached is None and state and state["objects"] and (state["height"], state["width"]) == image.shape[:2]:
+            _, lm = visible_objects_from_state(state)
+            self.canvas.show_rgb(blend_labels(image, lm, self.alpha), fit=True)
+        else:
+            self.canvas.show_rgb(image, fit=True)
         if in_project:
             self._mark_current()
+            self.prefetcher.set_current(name)
 
-        def make_session(progress=None):
-            return Session(image, self.models.clicker, self.models.head)
-
-        def got_session(session):
+        def got_features(features):
             if self.image_path != path:          # the user moved on meanwhile
                 return
-            state = self.project.load_state(name) if name else None
+            session = Session(image, self.models.clicker, self.models.head, features=features)
             if state:
                 session.load_state(state)
             self.session = session
             restored = f"restored {len(session.objects)} objects; " if state else ""
-            self.refresh(save=False)
             if name and self.project.has_prior(name):
-                self.got_prior(self.project.load_prior(name), cached=True)
+                self.got_prior(self.project.load_prior(name), cached=True)     # refreshes
             elif name:
+                self.refresh(save=False)
                 self.prior_label.setText(" Prior: computing ")
                 self.status(restored + "click objects (classes appear when the prior is done)")
-                self.prefetcher.set_current(name)
             else:
+                self.refresh(save=False)
                 self.prior_label.setText(" Prior: computing ")
                 self.status("Ready: click objects (the class appears when the prior is done)")
                 t0 = time.time()
@@ -754,7 +806,11 @@ class MainWindow(QtWidgets.QMainWindow):
                             on_done=lambda p: self.got_prior(p, seconds=time.time() - t0) if self.image_path == path else None,
                             progress=lambda d, t: self.progress.setValue(int(100 * d / t)))
 
-        self.run_bg(make_session, on_done=got_session)
+        if cached is not None:
+            got_features(cached)
+        else:
+            self.status(f"SAM is reading {path.name} (a few seconds; the saved labels are shown already)")
+            self.run_bg(lambda progress=None: self.models.sam_features(key, image), on_done=got_features)
 
     def got_prior(self, prior, seconds=None, cached=False):
         if self.session is None or self.session.prior is not None:
@@ -830,16 +886,36 @@ class MainWindow(QtWidgets.QMainWindow):
         super().closeEvent(e)
 
     def run_prelabel(self):
+        """The automatic draft, made in a background thread (it takes seconds on big
+        images); clicking keeps working meanwhile and the draft is added when ready."""
         s = self.session
         if s is None or s.prior is None:
             self.status("Pre-label needs the prior: wait for 'Prior: done'")
             return
-        self.status("Auto pre-label: snapping the prior's regions with SAM...")
-        QtWidgets.QApplication.processEvents()
-        t0 = time.time()
-        n = s.prelabel(keep_small_px=25)        # no 1-20 px specks in the object list
-        self.status(f"Auto pre-label: {n} objects in {time.time() - t0:.0f} s. Correct with clicks; Ctrl+Z removes the draft")
-        self.refresh()
+        if getattr(self, "_drafting", None) is s:
+            return
+        self._drafting = s
+        features, prior, t0 = self.models.clicker.features(), s.prior, time.time()
+        self.status("Auto pre-label: drafting the objects in the background (you can click meanwhile)...")
+
+        def work(progress=None):
+            from dmgseg.tool.prelabel import prelabel
+            with self.models.draft_lock:
+                d = self.models.drafter
+                d.set_features(features)
+                return prelabel(prior, d, keep_small_px=25)    # no 1-20 px specks
+
+        def done(props):
+            if getattr(self, "_drafting", None) is s:
+                self._drafting = None
+            if self.session is not s:            # the user moved to another image
+                return
+            n = s.apply_prelabel(props)
+            self.status(f"Auto pre-label: {n} objects in {time.time() - t0:.0f} s. "
+                        "Correct with clicks; Ctrl+Z removes the draft")
+            self.refresh()
+
+        self.run_bg(work, on_done=done)
 
     # -- interaction -------------------------------------------------------------
     def on_click(self, x, y, button, mods):
@@ -983,7 +1059,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.object_list.clearSelection()
         n = 0
         for i, o in enumerate(s.objects):
-            if o.mask.sum() < limit:
+            if o.area < limit:
                 self.object_list.item(i).setSelected(True)
                 n += 1
         self.status(f"Selected {n} object(s) smaller than {limit} px: press Delete to remove them")
@@ -1047,7 +1123,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 name = "(pending)" if o.pending else CLASS_NAMES[o.label]
                 flag = (" *" if o.manual is not None else "") + (" (auto)" if o.auto else "")
                 it = QtWidgets.QListWidgetItem(swatch(o.label if o.label is not None else 0),
-                                               f"#{i + 1}  {name}{flag}  ({int(o.mask.sum())} px)")
+                                               f"#{i + 1}  {name}{flag}  ({o.area} px)")
                 self.object_list.addItem(it)
             if s.active is not None:
                 self.object_list.setCurrentRow(s.active)

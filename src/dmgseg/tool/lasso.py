@@ -36,7 +36,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
-from dmgseg.tool.prelabel import ORDER, snap
+from dmgseg.tool.prelabel import ORDER, bbox, snap
 
 CONTAINERS = (1, 2)              # Building, Roof
 SPLIT = (4,)                     # Broken Window: countable, the prior often merges neighbours
@@ -45,15 +45,22 @@ SPLIT = (4,)                     # Broken Window: countable, the prior often mer
 def split_instances(blob, core=0.5):
     """Split a blob of merged instances at its thin bridges: the thick cores
     (far from the blob's edge) are the seeds; every blob pixel joins the nearest
-    core."""
-    dt = ndimage.distance_transform_edt(blob)
+    core. Works on the blob's bounding box."""
+    y0, y1, x0, x1 = bbox(blob)
+    crop = blob[y0:y1, x0:x1]
+    dt = ndimage.distance_transform_edt(np.pad(crop, 1))[1:-1, 1:-1]
     cores, n = ndimage.label(dt >= core * dt.max())
     if n <= 1:
         return [blob]
-    # cores are only thick parts of the blob; grow them back over the blob
     _, idx = ndimage.distance_transform_edt(cores == 0, return_indices=True)
-    lab = cores[idx[0], idx[1]] * blob
-    return [lab == k for k in range(1, n + 1) if (lab == k).any()]
+    lab = cores[idx[0], idx[1]] * crop
+    out = []
+    for k in range(1, n + 1):
+        m = np.zeros_like(blob)
+        m[y0:y1, x0:x1] = lab == k
+        if m.any():
+            out.append(m)
+    return out
 
 
 @dataclass
@@ -88,11 +95,13 @@ def widen(region, frac=0.03, min_px=3):
 
 
 def interior_points(region, n=3):
-    """The deepest point plus up to n-1 more deep points, spread out."""
-    dt = ndimage.distance_transform_edt(np.pad(region, 1))[1:-1, 1:-1]
+    """The deepest point plus up to n-1 more deep points, spread out (computed on
+    the region's bounding box)."""
+    y0, y1, x0, x1 = bbox(region)
+    dt = ndimage.distance_transform_edt(np.pad(region[y0:y1, x0:x1], 1))[1:-1, 1:-1]
     y, x = np.unravel_index(int(dt.argmax()), dt.shape)
-    pts = [(int(x), int(y))]
-    deep = np.argwhere(dt >= 0.5 * dt.max())[:, ::-1]
+    pts = [(int(x + x0), int(y + y0))]
+    deep = np.argwhere(dt >= 0.5 * dt.max())[:, ::-1] + np.array([x0, y0])
     if len(deep) > 4000:
         deep = deep[np.linspace(0, len(deep) - 1, 4000).astype(int)]
     for _ in range(n - 1):

@@ -39,6 +39,24 @@ class SamClicker:
             self.predictor.set_image(np.asarray(image_rgb))
         self.reset_object()
 
+    def features(self):
+        """The current image's SAM features (to cache, or to hand to a twin)."""
+        p = self.predictor
+        return {"features": p._features, "orig_hw": list(p._orig_hw)}
+
+    def set_features(self, f):
+        """Use features computed earlier (instant, instead of set_image)."""
+        p = self.predictor
+        p._features, p._orig_hw = f["features"], list(f["orig_hw"])
+        p._is_image_set, p._is_batch = True, False
+        self.reset_object()
+
+    def twin(self):
+        """A second clicker on the same (already fine-tuned) model, with its own
+        image state: for background work while this one serves the user."""
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
+        return SamClicker(predictor=SAM2ImagePredictor(self.predictor.model), choose=self.choose)
+
     @property
     def image_embedding(self):
         """SAM 2 image embedding of the current image: tensor (256, 64, 64)."""
