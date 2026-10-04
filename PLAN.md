@@ -179,6 +179,37 @@ Cards rebuilt with the fine-tuned SAM decoder (molab J2, `classhead/cards_*_samf
 
 Per class (right class on the left click, old → new head): **Roof 35.0 → 57.5 %**, **Damaged roof 62.2 → 70.3 %**, Damage 71.5 → 73.4 %, Broken Window 85.0 → 85.1 %, Building 85.0 → 81.7 %. More stable across seeds (± 0.1 %). The app uses fine-tuned SAM + this head (`classhead/head_a_samft.pt`).
 
+### 0.6h App v1 and drawing tools (2026-10-03/04)
+App v1: folder mode (Images panel, Prev/Next, auto-save to `_damage_annotator/`,
+prior cache + background pre-computing), CVAT XML export (exact masks / polygons,
+round trip verified with the dataset parser).
+
+Drawing tools (`tool/lasso.py`): **loop** = grab the objects inside (prior blobs
+snapped by SAM; containers Building/Roof skipped when they mostly continue outside
+the loop; merged Broken-Window blobs split at thin bridges; if nothing is
+recognized, the loop itself becomes the object), **line** = one object through
+points along it, **Shift/Option + loop** = exact add/cut, **Shift/Option + line** =
+SAM grow/shrink. Evaluation (`scripts/lasso_eval.py`, 400 val objects, fine-tuned
+SAM + head A, single gesture on an empty image; simulated rough loop = outline
+widened ~8 % + jitter; line = main axis):
+
+| gesture | IoU | class acc | IoU < 2k px (183) | 2k–20k px (166) | > 20k px (51) |
+|---|---|---|---|---|---|
+| one click | 0.639 | 77.5 % | **0.700** | 0.681 | 0.282 |
+| loop | 0.662 | **81.3 %** | 0.632 | 0.705 | **0.630** |
+| line | **0.686** | 78.3 % | 0.658 | **0.743** | 0.602 |
+| best of the three (user picks) | **0.778** | | | | |
+
+Per class (click -> loop): Building 0.27 -> 0.53, Roof 0.28 -> 0.53, Damaged roof
+0.27 -> 0.71, Damage 0.53 -> 0.60, Broken Window 0.73 -> 0.70. The gestures are
+complementary: click for small things, loop/line for large ones (a click on a big
+object picks a part of it). Loops create 1.5 objects on average.
+Window groups (96 loops around 2+ nearby broken windows, 4.9 per group): 57 % of
+the windows found with IoU >= 0.5, 1.5 extra objects per loop. The ceiling is the
+prior: in some images it calls the windows "Building" (download11: 92 %) or
+predicts a whole window row as one solid band. Tried and rejected: skipping blobs
+by "covers the loop edge" (single-loop IoU 0.68 -> 0.64 on the smoke set).
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).

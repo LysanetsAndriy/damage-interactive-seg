@@ -13,6 +13,10 @@ Mouse (on the image):
     right click / Ctrl+click   next class for the object under the cursor
     Shift+click           grow the active object (positive refinement)
     Alt(Option)+click     shrink the active object (negative refinement)
+    draw a loop           grab the objects inside it (or the loop itself as an object)
+    draw a line           one object along the line (a scribble over it)
+    Shift / Option + loop      add / cut exactly the drawn area (active object)
+    Shift / Option + line      grow / shrink the active object along the line
     wheel                 zoom, middle button / Space+drag: pan
 Keys: 1-5 set the class of the active object, 0 marks it as Other (e.g. a tree in
 front of the building: it is cut out of what is behind), Delete/Backspace removes
@@ -194,8 +198,12 @@ class PriorPrefetcher:
 
 # ----------------------------------------------------------------- canvas
 class Canvas(QtWidgets.QGraphicsView):
+    """Shows the image. A left click (press + release without moving) emits
+    `clicked`; a left drag draws a stroke and emits `drawn(points, is_loop, mods)`."""
     clicked = QtCore.Signal(int, int, object, object)   # x, y, button, modifiers
+    drawn = QtCore.Signal(object, bool, object)         # [(x, y)], loop?, modifiers
     moved = QtCore.Signal(int, int)
+    DRAG_PX = 6                                          # screen px before a press becomes a drag
 
     def __init__(self):
         super().__init__()
@@ -207,6 +215,10 @@ class Canvas(QtWidgets.QGraphicsView):
         self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
         self.setMouseTracking(True)
         self._pan = None
+        self._stroke = None              # image points of the stroke being drawn
+        self._press = None               # (screen pos, modifiers) of the left press
+        self._path = self.scene().addPath(QtGui.QPainterPath())
+        self._path.setZValue(10)
 
     def show_rgb(self, rgb, fit=False):
         h, w = rgb.shape[:2]
@@ -224,14 +236,24 @@ class Canvas(QtWidgets.QGraphicsView):
         p = self.mapToScene(e.position().toPoint())
         return int(p.x()), int(p.y())
 
+    def _inside(self, x, y):
+        r = self.item.pixmap().rect()
+        return 0 <= x < r.width() and 0 <= y < r.height()
+
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.MiddleButton or (e.button() == QtCore.Qt.LeftButton and
                                                      QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.MetaModifier):
             self._pan = e.position()
             return
         x, y = self._image_xy(e)
-        r = self.item.pixmap().rect()
-        if 0 <= x < r.width() and 0 <= y < r.height():
+        if not self._inside(x, y):
+            return
+        if e.button() == QtCore.Qt.LeftButton:
+            self._press = (e.position(), e.modifiers())
+            self._drag = False           # set once the mouse moves away (a loop ends where it began)
+            p = self.mapToScene(e.position().toPoint())
+            self._stroke = [(p.x(), p.y())]
+        else:
             self.clicked.emit(x, y, e.button(), e.modifiers())
 
     def mouseMoveEvent(self, e):
@@ -241,10 +263,52 @@ class Canvas(QtWidgets.QGraphicsView):
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(d.x()))
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(d.y()))
             return
+        if self._stroke is not None:
+            p = self.mapToScene(e.position().toPoint())
+            self._stroke.append((p.x(), p.y()))
+            self._drag = self._drag or self._dragging(e)
+            if self._drag:
+                self._draw_stroke()
         self.moved.emit(*self._image_xy(e))
+
+    def _dragging(self, e):
+        d = e.position() - self._press[0]
+        return abs(d.x()) + abs(d.y()) > self.DRAG_PX
+
+    def _draw_stroke(self):
+        from dmgseg.tool.lasso import is_loop
+        mods = self._press[1] | QtWidgets.QApplication.keyboardModifiers()
+        color = QtGui.QColor("#30e030" if mods & QtCore.Qt.ShiftModifier else
+                             "#ff3030" if mods & QtCore.Qt.AltModifier else "#ffff00")
+        path = QtGui.QPainterPath(QtCore.QPointF(*self._stroke[0]))
+        for x, y in self._stroke[1:]:
+            path.lineTo(x, y)
+        fill = QtGui.QColor(color)
+        if is_loop(self._stroke):
+            path.closeSubpath()
+            fill.setAlpha(60)
+        else:
+            fill.setAlpha(0)
+        pen = QtGui.QPen(color, 2, QtCore.Qt.DashLine)
+        pen.setCosmetic(True)
+        self._path.setPen(pen)
+        self._path.setBrush(fill)
+        self._path.setPath(path)
 
     def mouseReleaseEvent(self, e):
         self._pan = None
+        if self._stroke is None:
+            return
+        from dmgseg.tool.lasso import is_loop
+        stroke, (pos, mods), drag = self._stroke, self._press, self._drag or self._dragging(e)
+        self._stroke = self._press = None
+        self._path.setPath(QtGui.QPainterPath())
+        if not drag:
+            x, y = int(stroke[0][0]), int(stroke[0][1])
+            self.clicked.emit(x, y, QtCore.Qt.LeftButton, mods)
+        else:
+            mods = mods | QtWidgets.QApplication.keyboardModifiers()
+            self.drawn.emit(stroke, bool(is_loop(stroke)), mods)
 
 
 def swatch(class_id, size=12):
@@ -284,6 +348,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.canvas = Canvas()
         self.canvas.clicked.connect(self.on_click)
+        self.canvas.drawn.connect(self.on_drawn)
         self.canvas.moved.connect(lambda x, y: self.pos_label.setText(f" x={x} y={y} "))
 
         central = QtWidgets.QWidget()
@@ -345,7 +410,9 @@ class MainWindow(QtWidgets.QMainWindow):
         bl2.addWidget(self.object_list)
         v.addWidget(box2, 1)
         hint = QtWidgets.QLabel("Left click: new object\nRight click: next class\nShift+click: grow\n"
-                                "Option+click: shrink\n1-5: set class, 0: Other\n⌫ (Backspace): delete")
+                                "Option+click: shrink\nDraw a loop: grab objects inside\n"
+                                "Draw a line: object along it\nShift/Option+loop: add/cut area\n"
+                                "1-5: set class, 0: Other\n⌫ (Backspace): delete")
         hint.setFrameShape(QtWidgets.QFrame.Panel)
         hint.setFrameShadow(QtWidgets.QFrame.Sunken)
         v.addWidget(hint)
@@ -668,6 +735,41 @@ class MainWindow(QtWidgets.QMainWindow):
             o = s.objects[i]
             self.status(f"Object #{i + 1}: " + ("class pending (prior running)" if o.pending
                                                else CLASS_NAMES[o.label]))
+        self.time_label.setText(f" {1000 * (time.time() - t0):.0f} ms ")
+        self.refresh()
+
+    def on_drawn(self, stroke, loop, mods):
+        """A drawn stroke: loop = grab what is inside, open stroke = scribble.
+        Shift / Option: loop = add / cut exactly that area, scribble = SAM grow / shrink."""
+        s = self.session
+        if s is None:
+            return
+        t0 = time.time()
+        add, cut = bool(mods & QtCore.Qt.ShiftModifier), bool(mods & QtCore.Qt.AltModifier)
+        if loop and (add or cut):
+            i = s.edit_area(stroke, add=add, index=s.active)
+            what = "Added the area to" if add else "Cut the area from"
+            self.status(f"{what} object #{i + 1}" if i is not None else
+                        ("New object from the drawn area" if add else "Cut the area from all objects"))
+        elif loop:
+            self.status("Lasso: looking for objects inside the loop...")
+            QtWidgets.QApplication.processEvents()
+            new = s.lasso(stroke)
+            if new:
+                names = [CLASS_NAMES[s.objects[i].label] if s.objects[i].label is not None else "pending"
+                         for i in new]
+                summary = ", ".join(f"{names.count(n)} {n}" for n in dict.fromkeys(names))
+                self.status(f"Lasso: {len(new)} new object(s): {summary}")
+            else:
+                self.status("Lasso: nothing new inside the loop (already labeled)")
+        elif (add or cut) and s.active is not None:
+            s.scribble(stroke, positive=add, index=s.active)
+            self.status("Grew the active object along the stroke" if add else
+                        "Shrank the active object along the stroke")
+        else:
+            i = s.scribble(stroke)
+            o = s.objects[i]
+            self.status(f"Scribble -> object #{i + 1}: " + ("class pending" if o.pending else CLASS_NAMES[o.label]))
         self.time_label.setText(f" {1000 * (time.time() - t0):.0f} ms ")
         self.refresh()
 

@@ -121,3 +121,67 @@ def test_cvat_export_roundtrip_through_dataset_parser(tmp_path):
             assert np.array_equal(back, s.label_map())          # exact, incl. the tree cut-out
         else:
             assert (back == s.label_map()).mean() > 0.95
+
+
+# ------------------------------------------------------------------ drawing tools
+class DrawClicker(FakeClicker):
+    """+ box prompts (the box itself) and multi-point prompts (squares around the
+    positive points, minus squares around the negative ones)."""
+
+    def box_click(self, box, x, y):
+        self.points, self.labels = [box[:2], box[2:], (x, y)], [2, 3, 1]
+        m = np.zeros((self.h, self.w), bool)
+        m[box[1]:box[3], box[0]:box[2]] = True
+        self.logits, self.last_score = np.zeros((4, 4)), 0.9
+        return m
+
+    def prompt(self, points, labels, mask_input=None):
+        self.points, self.labels = list(points), list(labels)
+        m = np.zeros((self.h, self.w), bool)
+        for (x, y), l in zip(points, labels):
+            if l == 1:
+                m |= self._square(int(x), int(y), 4)
+        for (x, y), l in zip(points, labels):
+            if l == 0:
+                m &= ~self._square(int(x), int(y), 4)
+        self.logits, self.last_score = np.zeros((4, 4)), 0.8
+        return m
+
+
+def two_windows_prior(h, w):
+    prior = make_prior(h, w, 1)                  # Building everywhere
+    for x0 in (15, 40):
+        prior[15:26, x0:x0 + 11, :] = 0
+        prior[15:26, x0:x0 + 11, 4] = 1.0        # two "windows"
+    return prior
+
+
+def test_lasso_grabs_objects_inside_not_the_context():
+    from dmgseg.tool.lasso import is_loop
+    h, w = 60, 80
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    s.set_prior(two_windows_prior(h, w))
+    loop = [(10, 10), (56, 10), (56, 31), (10, 31), (11, 11)]
+    assert is_loop(loop) and not is_loop([(10, 10), (30, 12), (56, 30)])
+    new = s.lasso(loop)
+    assert [s.objects[i].label for i in new] == [4, 4]     # the windows, not a facade piece
+    assert s.lasso(loop) == []                             # already labeled: nothing new
+    s.undo()
+    assert s.objects == []
+
+
+def test_lasso_fallback_scribble_and_exact_edits():
+    h, w = 60, 80
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    s.set_prior(make_prior(h, w, 1))             # nothing but Building: no candidates in a small loop
+    new = s.lasso([(30, 30), (40, 30), (40, 40), (30, 40)])
+    assert len(new) == 1 and s.objects[new[0]].mask[35, 35]
+    i = s.scribble([(5, 50), (20, 50), (35, 50)])          # an object along the line
+    assert s.objects[i].mask[50, 5] and s.objects[i].mask[50, 35]
+    s.edit_area([(0, 0), (10, 0), (10, 10), (0, 10)], add=True, index=i)
+    assert s.objects[i].mask[5, 5]
+    s.edit_area([(0, 44), (79, 44), (79, 59), (0, 59)], add=False)   # cut everywhere
+    assert not s.objects[i].mask[50, 20] and s.objects[i].mask[5, 5]
+    n = len(s.objects)
+    s.edit_area([(28, 28), (42, 28), (42, 42), (28, 42)], add=False)  # empties the lasso object
+    assert len(s.objects) == n - 1

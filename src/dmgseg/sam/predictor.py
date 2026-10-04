@@ -85,6 +85,19 @@ class SamClicker:
         self.last_score = float(scores[0])
         return masks[0].astype(bool)
 
+    def prompt(self, points, labels, mask_input=None):
+        """Any prompt as one new object state: points with labels (1 positive,
+        0 negative, 2/3 box corners), optionally the previous low-res logits.
+        -> single mask (several points are not ambiguous, so no multimask)."""
+        self.points, self.labels = [tuple(p) for p in points], list(labels)
+        with torch.inference_mode():
+            masks, scores, logits = self.predictor.predict(
+                point_coords=np.array(self.points, dtype=np.float32), point_labels=np.array(self.labels),
+                mask_input=None if mask_input is None else mask_input[None], multimask_output=False)
+        self.logits = logits[0]
+        self.last_score = float(scores[0])
+        return masks[0].astype(bool)
+
     def choose_index(self, k):
         """After the first click: continue from candidate k instead of the picked one."""
         masks, scores = self.candidates

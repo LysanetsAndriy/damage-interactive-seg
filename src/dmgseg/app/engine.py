@@ -23,6 +23,7 @@ from dmgseg.classhead.features import CARD_SIZE, REFINED, card
 from dmgseg.classhead.mlp import CardHead, predict
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE, class_ranking, fit_prior
+from dmgseg.tool.lasso import grab, polygon_mask, stroke_points
 from dmgseg.tool.prelabel import prelabel as _prelabel
 
 OTHER = 0
@@ -58,6 +59,13 @@ class Obj:
         if self.pending:
             return None
         return self.ranking[self.choice % len(self.ranking)] if self.ranking else None
+
+
+def mask_to_logits(mask, size=256, scale=10.0):
+    """A mask as SAM's low-res mask prompt (SAM 2 squashes the image to a square),
+    so SAM refinements after an exact edit start from the edited shape."""
+    m = cv2.resize(mask.astype(np.float32), (size, size), interpolation=cv2.INTER_AREA)
+    return ((m - 0.5) * 2 * scale).astype(np.float32)
 
 
 class ClassHead:
@@ -183,6 +191,98 @@ class Session:
         self.active = index
         return index
 
+    # -- drawing -------------------------------------------------------------
+    def _add(self, mask, prior_class, sam_score, points, labels, click_no=1):
+        o = Obj(mask=mask, ranking=[], sam_score=sam_score, cand_type=REFINED, click_no=click_no,
+                points=list(points), labels=list(labels), logits=mask_to_logits(mask))
+        if prior_class is not None:
+            o.ranking = [prior_class] + [c for c in CLICKABLE if c != prior_class] + CYCLE_END
+        else:
+            o.ranking = self._ranking(o)
+            o.pending = self.prior is None
+        self.objects.append(o)
+        return len(self.objects) - 1
+
+    def lasso(self, polygon):
+        """A loop drawn around things: grab the objects inside (tool/lasso.py).
+        Returns the new object indices (one undo step)."""
+        region = polygon_mask(polygon, self.h, self.w)
+        if region.sum() < 16:
+            return []
+        self._snapshot()
+        lm = self.label_map()
+        new = []
+        for g in grab(region, self.prior, self.clicker, lm):
+            i = self._add(g.mask, g.prior_class, g.sam_score, g.points, g.labels)
+            o = self.objects[i]
+            if g.prior_class is None and o.label is not None and (lm[o.mask] == o.label).mean() >= 0.7:
+                self.objects.pop()            # the loop is already labeled with this class
+                continue
+            new.append(i)
+        if not new:
+            self._undo.pop()
+        else:
+            self.active = new[-1]
+        return new
+
+    def scribble(self, stroke, positive=True, index=None):
+        """An open stroke. Without index: a new object through points along it.
+        With index: refine that object with all those points (grow / shrink)."""
+        pts = [(min(max(x, 0), self.w - 1), min(max(y, 0), self.h - 1)) for x, y in stroke_points(stroke)]
+        self._snapshot()
+        c = self.clicker
+        if index is None:
+            mask = c.prompt(pts, [1] * len(pts))
+            o = Obj(mask=mask, ranking=[], sam_score=c.last_score, cand_type=REFINED, click_no=2,
+                    points=list(c.points), labels=list(c.labels), logits=c.logits.copy())
+            o.ranking = self._ranking(o)
+            o.pending = self.prior is None
+            self.objects.append(o)
+            self.active = len(self.objects) - 1
+            return self.active
+        o = self.objects[index]
+        logits = o.logits if o.logits is not None else mask_to_logits(o.mask)
+        mask = c.prompt(list(o.points) + pts, list(o.labels) + [int(positive)] * len(pts), logits)
+        o.mask, o.points, o.labels, o.logits = mask, list(c.points), list(c.labels), c.logits.copy()
+        o.sam_score, o.cand_type, o.click_no = c.last_score, REFINED, min(o.click_no + 1, 3)
+        if o.manual is None and o.choice == 0:
+            o.ranking = self._ranking(o)
+        self.active = index
+        return index
+
+    def edit_area(self, polygon, add=True, index=None):
+        """Exact pixel edit with a loop (no SAM). add: the area joins object `index`
+        (a new object if None). Cut: the area leaves object `index`, or every object
+        when index is None; objects left empty are removed. Returns the object index."""
+        region = polygon_mask(polygon, self.h, self.w)
+        if not region.any():
+            return index
+        self._snapshot()
+        if add:
+            if index is None:
+                return self._add_exact(region)
+            targets = [index]
+        else:
+            targets = [index] if index is not None else [i for i, o in enumerate(self.objects)
+                                                         if (o.mask & region).any()]
+        for i in targets:
+            o = self.objects[i]
+            o.mask = (o.mask | region) if add else (o.mask & ~region)
+            o.logits, o.cand_type = mask_to_logits(o.mask), REFINED
+        keep = [i for i, o in enumerate(self.objects) if o.mask.any()]
+        if len(keep) < len(self.objects):
+            active = self.objects[index] if index is not None and index in keep else None
+            self.objects = [self.objects[i] for i in keep]
+            index = self.objects.index(active) if active is not None else None
+        self.active = index
+        return index
+
+    def _add_exact(self, region):
+        ys, xs = np.nonzero(region)
+        i = self._add(region, None, 0.0, [(xs.min(), ys.min()), (xs.max() + 1, ys.max() + 1)], [2, 3])
+        self.active = i
+        return i
+
     def next_class(self, index):
         """Right click on an object: the next class in its ranking."""
         self._snapshot()
@@ -233,7 +333,7 @@ class Session:
             self.objects.append(Obj(mask=mask, ranking=d["ranking"], choice=d["choice"], manual=d["manual"],
                                     sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
                                     points=[tuple(p) for p in d["points"]], labels=d["labels"],
-                                    logits=None, pending=d["pending"], auto=d["auto"]))
+                                    logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"]))
         self.prelabeled = state.get("prelabeled", False)
         self.active, self._undo = None, []
 
