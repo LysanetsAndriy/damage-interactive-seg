@@ -94,7 +94,8 @@ def visible_objects_from_state(state):
         n = (y1 - y0) * (x1 - x0)
         bits = np.frombuffer(base64.b64decode(d["bits"]), np.uint8)
         m[y0:y1, x0:x1] = np.unpackbits(bits)[:n].reshape(y1 - y0, x1 - x0).astype(bool)
-        objs.append(Obj(mask=m, ranking=d["ranking"], choice=d["choice"], manual=d["manual"], pending=d["pending"]))
+        objs.append(Obj(mask=m, ranking=d["ranking"], choice=d["choice"], manual=d["manual"], pending=d["pending"],
+                        decided=d.get("decided")))
     lm = np.zeros((h, w), np.uint8)
     order = sorted(range(len(objs)), key=lambda i: paint_key(objs[i], i))
     for i in order:

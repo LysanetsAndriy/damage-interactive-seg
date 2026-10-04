@@ -32,26 +32,26 @@ OTHER = 0
 # their area out of whatever is behind them; unlabeled pixels are Other as well.
 PAINT_ORDER = list(CLICKABLE) + [OTHER]
 CYCLE_END = [OTHER]              # right-click cycling ends with "Other"
-CONTENT = (3, 4, 5)              # Damage, Broken Window, Damaged roof (sit on buildings/roofs)
 
 
 def paint_key(o, i):
     """Paint order (painted later = on top):
-    0. automatically classified objects, by class priority (as in the dataset:
-       Building < Roof < Damage < Broken Window < Damaged roof);
-    1. objects whose class the USER chose (number key, menu or right click), if it
-       is a content class: the user's decision beats the automatic ones, e.g. a
-       Damage object the user made over a window blob from the prior shows as
-       Damage. (Building / Roof chosen by the user stay below, so confirming a
-       building never hides the windows and damage on it);
+    0. objects with an automatic class (pre-label blobs, click / loop / line objects
+       classified by the head), by class priority as in the dataset:
+       Building < Roof < Damage < Broken Window < Damaged roof;
+    1. objects whose class the USER chose (number key, menu, right click), in the
+       order of those decisions: the latest decision is on top. Pressing 1 on a
+       building paints all of it Building, over prior blobs too; pressing 4 on a
+       window afterwards brings that window back on top;
     2. Other, on top of everything (it cuts its area out).
     Objects still pending (no class yet) are not painted."""
     if o.label is None:
-        return (-1, 0, i)
+        return (-1, 0, 0, i)
     if o.label == OTHER:
-        return (2, 0, i)
-    user = o.manual is not None or o.choice > 0
-    return (1 if user and o.label in CONTENT else 0, PAINT_ORDER.index(o.label), i)
+        return (2, 0, 0, i)
+    if o.decided is not None or o.manual is not None:
+        return (1, 0, o.decided or 0, i)
+    return (0, PAINT_ORDER.index(o.label), 0, i)
 COLORS = {0: (160, 160, 160), 1: (40, 170, 60), 2: (255, 165, 0), 3: (170, 50, 200),
           4: (30, 90, 255), 5: (230, 30, 30)}
 
@@ -74,6 +74,7 @@ class Obj:
     # Shift/Option click re-asks SAM for the whole object. Otherwise (pre-label
     # blobs, exact edits, clipped or reloaded masks) clicks edit the mask locally.
     sam_valid: bool = True
+    decided: int | None = None        # order of the user's class decision (paint_key)
 
     @property
     def label(self):
@@ -353,17 +354,22 @@ class Session:
         self.objects = [o for i, o in enumerate(self.objects) if i not in drop]
         self.active = None
 
+    def _decide(self, o):
+        o.decided = 1 + max((x.decided or 0 for x in self.objects), default=0)
+
     def next_class(self, index):
         """Right click on an object: the next class in its ranking."""
         self._snapshot()
         o = self.objects[index]
         o.manual = None
         o.choice = (o.choice + 1) % len(o.ranking)
+        self._decide(o)
         self.active = index
 
     def set_class(self, index, class_id):
         self._snapshot()
         self.objects[index].manual = class_id
+        self._decide(self.objects[index])
         self.active = index
 
     def set_classes(self, indices, class_id):
@@ -373,6 +379,7 @@ class Session:
         self._snapshot()
         for i in indices:
             self.objects[i].manual = class_id
+            self._decide(self.objects[i])
         self.active = indices[-1]
 
     def delete(self, index):
@@ -396,7 +403,7 @@ class Session:
                 "manual": None if o.manual is None else int(o.manual), "sam_score": float(o.sam_score),
                 "cand_type": int(o.cand_type), "click_no": int(o.click_no),
                 "points": [[float(a), float(b)] for a, b in o.points], "labels": list(map(int, o.labels)),
-                "pending": bool(o.pending), "auto": bool(o.auto)})
+                "pending": bool(o.pending), "auto": bool(o.auto), "decided": o.decided})
         return {"version": 1, "width": self.w, "height": self.h, "prelabeled": self.prelabeled, "objects": objs}
 
     def load_state(self, state):
@@ -413,6 +420,7 @@ class Session:
                                     sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
                                     points=[tuple(p) for p in d["points"]], labels=d["labels"],
                                     logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"],
+                                    decided=d.get("decided"),
                                     sam_valid=False))
         self.prelabeled = state.get("prelabeled", False)
         self.active, self._undo = None, []

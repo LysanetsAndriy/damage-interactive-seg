@@ -223,9 +223,9 @@ def test_single_loop_local_edits_and_multi_delete():
     assert len(s.objects) == 2
 
 
-def test_user_class_beats_automatic_window(tmp_path):
-    """A Damage object the user sets over an automatic Broken Window blob shows as
-    Damage (also in the CVAT export); a user-confirmed Building does not hide it."""
+def test_latest_user_class_decision_is_on_top(tmp_path):
+    """Pressing a class key paints the whole object in that class, over prior
+    blobs too; the latest decision is on top; the CVAT export reproduces it."""
     from dmgseg.app.engine import Obj
     from dmgseg.app.project import FolderProject, export_cvat
     from dmgseg.data.cvat import parse_annotations, semantic_mask
@@ -237,16 +237,26 @@ def test_user_class_beats_automatic_window(tmp_path):
     bld = np.zeros((h, w), bool); bld[0:35, 0:45] = True
     s.objects = [Obj(mask=win, ranking=[4, 1, 2, 3, 5, 0], auto=True, sam_valid=False),
                  Obj(mask=bld, ranking=[1, 2, 3, 4, 5, 0]),
-                 Obj(mask=dmg, ranking=[4, 3, 1, 2, 5, 0])]
-    s.set_classes([1], 1)                     # user confirms the building
-    assert s.label_map()[15, 15] == 4         # the window still shows
-    s.set_class(2, 3)                         # user: the bigger object is Damage
+                 Obj(mask=dmg, ranking=[3, 1, 2, 4, 5, 0])]
+    assert s.label_map()[15, 15] == 4          # automatic: class priority (window on top)
+    s.set_class(1, 1)                          # user: all of it is Building
+    assert s.label_map()[15, 15] == 1 and s.label_map()[7, 7] == 1
+    s.set_class(0, 4)                          # user: but this window is a window
+    assert s.label_map()[15, 15] == 4 and s.label_map()[7, 7] == 1
+    s.set_classes([2], 3)                      # user: and this area is Damage
     lm = s.label_map()
     assert lm[15, 15] == 3 and lm[30, 30] == 1
     assert s.object_at(15, 15) == 2
-    # the export reproduces it
+    s.undo()
+    assert s.label_map()[15, 15] == 4
+    s.set_classes([2], 3)
+    lm = s.label_map()
+    st = s.to_state()
+    s2 = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    s2.load_state(st)
+    assert np.array_equal(s2.label_map(), lm)
     Image.fromarray(np.zeros((h, w, 3), np.uint8)).save(tmp_path / "a.png")
     proj = FolderProject(tmp_path)
-    proj.save_state("a.png", s.to_state())
+    proj.save_state("a.png", st)
     export_cvat(proj, tmp_path / "x.xml")
     assert np.array_equal(semantic_mask(parse_annotations(tmp_path / "x.xml")[0]), lm)
