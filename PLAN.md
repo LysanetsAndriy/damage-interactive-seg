@@ -184,7 +184,23 @@ App v1: folder mode (Images panel, Prev/Next, auto-save to `_damage_annotator/`,
 prior cache + background pre-computing), CVAT XML export (exact masks / polygons,
 round trip verified with the dataset parser).
 
-Drawing tools (`tool/lasso.py`): **loop** = grab the objects inside (prior blobs
+**Update 2026-10-04 (after user testing):** a plain loop must mean "this object".
+The prior-driven loop failed on real use: a loop around a building gave loop-shaped
+Roof/Building pieces (the prior called the facade Roof and its blob was clipped to
+the loop), and loops around a fire ladder or a balcony panel gave nothing (the prior
+saw already-labeled Damage there). New default loop = SAM-first (`loop_object`):
+candidates from the loop's box (3 masks), box + 3 inside points, box + inside +
+4 "not this" points between the loop and its box; the candidate with the best IoU
+with the loop (unclipped, so spills lose) wins, then clipped to the widened loop.
+The prior-driven grab moved to Cmd + loop. Same 400 objects:
+loop IoU 0.662 -> **0.732** (class 80.5 %); < 2k px 0.632 -> 0.667, 2k-20k
+0.705 -> 0.776, > 20k px 0.630 -> **0.816**; Building 0.53 -> 0.83, Roof 0.53 -> 0.61,
+Damage 0.60 -> 0.72; best of click/loop/line 0.778 -> 0.795. The user's ladder and
+panel cases now give clean SAM shapes. Also: Shift/Option clicks on pre-label blobs
+edit locally (SAM segments only the piece under the cursor), multi-delete and
+"Select tiny" in the Objects list, no pre-label specks < 25 px in the app.
+
+First version (now Cmd + loop) — Drawing tools (`tool/lasso.py`): **loop** = grab the objects inside (prior blobs
 snapped by SAM; containers Building/Roof skipped when they mostly continue outside
 the loop; merged Broken-Window blobs split at thin bridges; if nothing is
 recognized, the loop itself becomes the object), **line** = one object through

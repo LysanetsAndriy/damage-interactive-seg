@@ -3,13 +3,13 @@
 Each object gets three single gestures on an empty image (fresh state each time):
     click     one left click at the object's deepest point (the baseline)
     loop      a rough loop around it: the object's outline widened by ~8 % of its
-              size, simplified and jittered like a hand-drawn line
+              size, simplified and jittered like a hand-drawn line (one object)
     scribble  a line along the object's main axis through its interior
 -> IoU with the object (best matching new object; and the union of all new
 objects for the loop), class correct, how many objects the loop created.
 
-Groups: for each Broken Window with >= 1 other broken window nearby, one loop
-around the group -> share of the group's windows found (IoU >= 0.5) and the
+Groups: for each Broken Window with >= 1 other broken window nearby, one
+Cmd+loop (group mode) around the group -> share of the group's windows found (IoU >= 0.5) and the
 number of extra objects.
 
     python scripts/lasso_eval.py --max-objects 400
@@ -134,7 +134,7 @@ def main():
                     continue
                 members = [wins[j] for j in near]
                 fresh(s)
-                new = s.lasso(rough_loop(np.any(members, axis=0), rng, widen=0.05))
+                new = s.lasso(rough_loop(np.any(members, axis=0), rng, widen=0.05), group=True)
                 found = sum(any(iou(s.objects[j].mask, m) >= 0.5 for j in new) for m in members)
                 matched = sum(any(iou(s.objects[j].mask, m) >= 0.5 for m in members) for j in new)
                 groups.append({"image": name, "windows": len(members), "found": found, "new": len(new),

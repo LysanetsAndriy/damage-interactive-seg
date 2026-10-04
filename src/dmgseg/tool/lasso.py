@@ -1,9 +1,16 @@
-"""Drawing tools: a loop around things grabs them, a scribble over one thing selects it.
+"""Drawing tools: a loop around a thing selects it, a scribble over a thing selects it.
 
 A drawn stroke is a LOOP when it ends near where it started (relative to its
 size), otherwise a SCRIBBLE.
 
-grab(loop): the objects the user encircled.
+loop_object(loop): the one object the user encircled. SAM proposes shapes (box of
+the loop alone with 3 candidates; + points inside the loop; + "not this" points
+between the loop and its box) and the loop picks: the candidate that matches the
+loop best (IoU, computed before clipping, so a mask that spills far outside the
+loop loses). The winner is clipped to the slightly widened loop. If no candidate
+matches at all, the loop's own shape is the object.
+
+grab(loop) (Cmd/Ctrl + loop): all the objects the prior finds inside the loop.
     1. Candidates: every prior class blob inside the loop, snapped by SAM (box +
        deepest point, grow-only, as in the automatic pre-label).
     2. Containers (Building, Roof: the things other classes sit on) belong to the
@@ -163,3 +170,38 @@ def grab(region, prior, clicker, label_map=None, min_inside=0.5, covered=0.7, mi
             mask, score = region.copy(), 0.0
         out.append(Grab(mask, None, score, list(clicker.points), list(clicker.labels)))
     return out
+
+
+def _iou(a, b):
+    u = (a | b).sum()
+    return (a & b).sum() / u if u else 0.0
+
+
+def loop_object(region, clicker, min_fit=0.2):
+    """-> (mask, sam_score, points, labels, from_sam). Sets the clicker's state to
+    the winning prompt so later clicks refine it."""
+    ys, xs = np.nonzero(region)
+    x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    box, box_l = [(x0, y0), (x1, y1)], [2, 3]
+    wide = widen(region)
+    pos = interior_points(region, 3)
+    outside = np.zeros_like(region)
+    outside[y0:y1, x0:x1] = True
+    outside &= ~wide
+    neg = interior_points(outside, 4) if outside.sum() >= 50 else []
+    prompts = [(box, box_l, True), (box + pos, box_l + [1] * len(pos), False)]
+    if neg:
+        prompts.append((box + pos + neg, box_l + [1] * len(pos) + [0] * len(neg), False))
+    best = None
+    for pts, lab, multi in prompts:
+        masks, scores, logits = clicker.predict_raw(pts, lab, multi)
+        for m, sc, lg in zip(masks, scores, logits):
+            fit = _iou(m, region) + 0.05 * float(sc)
+            if best is None or fit > best[0]:
+                best = (fit, m, float(sc), lg, pts, lab)
+    fit, m, sc, lg, pts, lab = best
+    clicker.set_state(pts, lab, lg, sc)
+    if _iou(m, region) < min_fit:
+        return region.copy(), 0.0, pts, lab, False
+    clipped = m & wide
+    return clipped, sc, pts, lab, clipped.sum() >= 0.97 * m.sum()

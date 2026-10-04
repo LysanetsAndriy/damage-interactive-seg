@@ -135,6 +135,19 @@ class DrawClicker(FakeClicker):
         self.logits, self.last_score = np.zeros((4, 4)), 0.9
         return m
 
+    def predict_raw(self, points, labels, multimask=False):
+        """Box-only prompts: the box shrunk by 0, 3, 6 px (3 candidates)."""
+        (x0, y0), (x1, y1) = points[0], points[1]
+        out = []
+        for d in ((0, 3, 6) if multimask else (3,)):
+            m = np.zeros((self.h, self.w), bool)
+            m[y0 + d:y1 - d, x0 + d:x1 - d] = True
+            out.append(m)
+        return np.stack(out), np.full(len(out), 0.8), np.zeros((len(out), 4, 4))
+
+    def set_state(self, points, labels, logits, score):
+        self.points, self.labels, self.logits, self.last_score = list(points), list(labels), logits, score
+
     def prompt(self, points, labels, mask_input=None):
         self.points, self.labels = list(points), list(labels)
         m = np.zeros((self.h, self.w), bool)
@@ -163,9 +176,9 @@ def test_lasso_grabs_objects_inside_not_the_context():
     s.set_prior(two_windows_prior(h, w))
     loop = [(10, 10), (56, 10), (56, 31), (10, 31), (11, 11)]
     assert is_loop(loop) and not is_loop([(10, 10), (30, 12), (56, 30)])
-    new = s.lasso(loop)
+    new = s.lasso(loop, group=True)
     assert [s.objects[i].label for i in new] == [4, 4]     # the windows, not a facade piece
-    assert s.lasso(loop) == []                             # already labeled: nothing new
+    assert s.lasso(loop, group=True) == []                 # already labeled: nothing new
     s.undo()
     assert s.objects == []
 
@@ -174,7 +187,7 @@ def test_lasso_fallback_scribble_and_exact_edits():
     h, w = 60, 80
     s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
     s.set_prior(make_prior(h, w, 1))             # nothing but Building: no candidates in a small loop
-    new = s.lasso([(30, 30), (40, 30), (40, 40), (30, 40)])
+    new = s.lasso([(30, 30), (40, 30), (40, 40), (30, 40)], group=True)
     assert len(new) == 1 and s.objects[new[0]].mask[35, 35]
     i = s.scribble([(5, 50), (20, 50), (35, 50)])          # an object along the line
     assert s.objects[i].mask[50, 5] and s.objects[i].mask[50, 35]
@@ -185,3 +198,26 @@ def test_lasso_fallback_scribble_and_exact_edits():
     n = len(s.objects)
     s.edit_area([(28, 28), (42, 28), (42, 42), (28, 42)], add=False)  # empties the lasso object
     assert len(s.objects) == n - 1
+
+
+def test_single_loop_local_edits_and_multi_delete():
+    h, w = 60, 80
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    s.set_prior(two_windows_prior(h, w))
+    [i] = s.lasso([(10, 10), (40, 10), (40, 40), (10, 40)])        # one object, picked by the loop
+    o = s.objects[i]
+    assert o.sam_valid and o.mask[25, 25] and not o.mask[5, 5]
+    # a pre-label-like object (not SAM's mask): Option+click cuts only the piece under the cursor
+    blob = np.zeros((h, w), bool)
+    blob[5:55, 45:78] = True
+    s.objects.append(type(o)(mask=blob, ranking=[1, 2, 3, 4, 5, 0], sam_valid=False, auto=True))
+    j = len(s.objects) - 1
+    s.refine(60, 30, False, j)
+    m = s.objects[j].mask
+    assert not m[30, 60] and m[10, 50] and m.sum() > 0.7 * blob.sum()
+    s.set_classes([i, j], 3)
+    assert s.objects[i].label == s.objects[j].label == 3
+    s.delete_many([i, j])
+    assert s.objects == []
+    s.undo()
+    assert len(s.objects) == 2

@@ -13,10 +13,16 @@ Mouse (on the image):
     right click / Ctrl+click   next class for the object under the cursor
     Shift+click           grow the active object (positive refinement)
     Alt(Option)+click     shrink the active object (negative refinement)
-    draw a loop           grab the objects inside it (or the loop itself as an object)
+    draw a loop           the object inside it (SAM shapes it, the loop chooses)
+    Cmd(Ctrl) + loop      every object the prior finds inside the loop
     draw a line           one object along the line (a scribble over it)
     Shift / Option + loop      add / cut exactly the drawn area (active object)
     Shift / Option + line      grow / shrink the active object along the line
+On pre-label objects (and after exact edits) Shift / Option clicks are local: only
+the piece under the cursor is added / removed. Option+click works on the object
+under the cursor.
+Objects list: select several (Shift / Cmd+click), right click for Delete / Set
+class, Delete or Backspace removes the selected objects.
     wheel                 zoom, middle button / Space+drag: pan
 Keys: 1-5 set the class of the active object, 0 marks it as Other (e.g. a tree in
 front of the building: it is cut out of what is behind), Delete/Backspace removes
@@ -279,6 +285,7 @@ class Canvas(QtWidgets.QGraphicsView):
         from dmgseg.tool.lasso import is_loop
         mods = self._press[1] | QtWidgets.QApplication.keyboardModifiers()
         color = QtGui.QColor("#30e030" if mods & QtCore.Qt.ShiftModifier else
+                             "#30e0ff" if mods & QtCore.Qt.ControlModifier else
                              "#ff3030" if mods & QtCore.Qt.AltModifier else "#ffff00")
         path = QtGui.QPainterPath(QtCore.QPointF(*self._stroke[0]))
         for x, y in self._stroke[1:]:
@@ -406,13 +413,27 @@ class MainWindow(QtWidgets.QMainWindow):
         box2 = QtWidgets.QGroupBox("Objects")
         bl2 = QtWidgets.QVBoxLayout(box2)
         self.object_list = QtWidgets.QListWidget()
+        self.object_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.object_list.currentRowChanged.connect(self.on_object_selected)
+        self.object_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.object_list.customContextMenuRequested.connect(self.object_menu)
         bl2.addWidget(self.object_list)
+        row = QtWidgets.QHBoxLayout()
+        b = QtWidgets.QPushButton("Delete")
+        b.setToolTip("Delete the selected objects (Backspace)")
+        b.clicked.connect(self.delete_active)
+        row.addWidget(b)
+        b = QtWidgets.QPushButton("Select tiny")
+        b.setToolTip("Select objects smaller than 50 px (then Delete)")
+        b.clicked.connect(self.select_tiny)
+        row.addWidget(b)
+        bl2.addLayout(row)
         v.addWidget(box2, 1)
         hint = QtWidgets.QLabel("Left click: new object\nRight click: next class\nShift+click: grow\n"
-                                "Option+click: shrink\nDraw a loop: grab objects inside\n"
-                                "Draw a line: object along it\nShift/Option+loop: add/cut area\n"
-                                "1-5: set class, 0: Other\n⌫ (Backspace): delete")
+                                "Option+click: shrink / cut piece\nLoop: the object inside\n"
+                                "Cmd+loop: all objects inside\nLine: object along it\n"
+                                "Shift/Option+loop: add/cut area\n1-5: set class, 0: Other\n"
+                                "⌫ (Backspace): delete selected")
         hint.setFrameShape(QtWidgets.QFrame.Panel)
         hint.setFrameShadow(QtWidgets.QFrame.Sunken)
         v.addWidget(hint)
@@ -706,7 +727,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status("Auto pre-label: snapping the prior's regions with SAM...")
         QtWidgets.QApplication.processEvents()
         t0 = time.time()
-        n = s.prelabel()
+        n = s.prelabel(keep_small_px=25)        # no 1-20 px specks in the object list
         self.status(f"Auto pre-label: {n} objects in {time.time() - t0:.0f} s. Correct with clicks; Ctrl+Z removes the draft")
         self.refresh()
 
@@ -724,12 +745,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             s.next_class(i)
             self.status(f"Object #{i + 1}: {CLASS_NAMES[s.objects[i].label]}")
-        elif mods & QtCore.Qt.ShiftModifier and s.active is not None:
+        elif mods & QtCore.Qt.ShiftModifier:
+            if s.active is None:
+                self.status("Shift+click grows the selected object: select one first")
+                return
+            local = not s.objects[s.active].sam_valid
             s.refine(x, y, True)
-            self.status("Grew the active object")
-        elif mods & QtCore.Qt.AltModifier and s.active is not None:
-            s.refine(x, y, False)
-            self.status("Shrank the active object")
+            self.status("Added the piece under the cursor" if local else "Grew the active object")
+        elif mods & QtCore.Qt.AltModifier:
+            # the active object if the click is on it, else the object under the cursor
+            i = s.active if s.active is not None and s.objects[s.active].mask[y, x] else s.object_at(x, y)
+            if i is None:
+                self.status("Option+click: no object here")
+                return
+            local = not s.objects[i].sam_valid
+            s.refine(x, y, False, i)
+            self.status(f"Cut the piece under the cursor from object #{i + 1}" if local
+                        else f"Shrank object #{i + 1}")
         else:
             i = s.new_object(x, y)
             o = s.objects[i]
@@ -746,15 +778,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         t0 = time.time()
         add, cut = bool(mods & QtCore.Qt.ShiftModifier), bool(mods & QtCore.Qt.AltModifier)
+        group = bool(mods & QtCore.Qt.ControlModifier)          # Cmd on a Mac
         if loop and (add or cut):
             i = s.edit_area(stroke, add=add, index=s.active)
             what = "Added the area to" if add else "Cut the area from"
             self.status(f"{what} object #{i + 1}" if i is not None else
                         ("New object from the drawn area" if add else "Cut the area from all objects"))
+        elif loop and not group:
+            i = s.lasso(stroke)[0]
+            o = s.objects[i]
+            kept_loop = not o.sam_valid and o.sam_score == 0
+            self.status(f"Loop -> object #{i + 1}: " + ("class pending" if o.pending else CLASS_NAMES[o.label])
+                        + (" (no SAM shape fits the loop: kept the loop's own shape)" if kept_loop else ""))
         elif loop:
             self.status("Lasso: looking for objects inside the loop...")
             QtWidgets.QApplication.processEvents()
-            new = s.lasso(stroke)
+            new = s.lasso(stroke, group=True)
             if new:
                 names = [CLASS_NAMES[s.objects[i].label] if s.objects[i].label is not None else "pending"
                          for i in new]
@@ -776,12 +815,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def keyPressEvent(self, e):
         s = self.session
         key = e.key()
-        if s is not None and s.active is not None and QtCore.Qt.Key_1 <= key <= QtCore.Qt.Key_5:
-            s.set_class(s.active, CLICKABLE[key - QtCore.Qt.Key_1])
+        rows = self.selected_objects() if s is not None else []
+        if rows and QtCore.Qt.Key_1 <= key <= QtCore.Qt.Key_5:
+            s.set_classes(rows, CLICKABLE[key - QtCore.Qt.Key_1])
             self.refresh()
-        elif s is not None and s.active is not None and key == QtCore.Qt.Key_0:
-            s.set_class(s.active, 0)
-            self.status(f"Object #{s.active + 1} marked as Other (cut out of what is behind it)")
+        elif rows and key == QtCore.Qt.Key_0:
+            s.set_classes(rows, 0)
+            self.status(f"{len(rows)} object(s) marked as Other (cut out of what is behind)")
             self.refresh()
         else:
             super().keyPressEvent(e)
@@ -802,10 +842,45 @@ class MainWindow(QtWidgets.QMainWindow):
             self.session.undo()
             self.refresh()
 
+    def selected_objects(self):
+        """Rows selected in the Objects list, or the active object."""
+        rows = sorted({self.object_list.row(it) for it in self.object_list.selectedItems()})
+        if not rows and self.session is not None and self.session.active is not None:
+            rows = [self.session.active]
+        return rows
+
     def delete_active(self):
-        if self.session and self.session.active is not None:
-            self.session.delete(self.session.active)
+        s = self.session
+        rows = self.selected_objects() if s else []
+        if rows:
+            s.delete_many(rows)
+            self.status(f"Deleted {len(rows)} object(s) (Ctrl+Z brings them back)")
             self.refresh()
+
+    def select_tiny(self, limit=50):
+        s = self.session
+        if s is None:
+            return
+        self.object_list.clearSelection()
+        n = 0
+        for i, o in enumerate(s.objects):
+            if o.mask.sum() < limit:
+                self.object_list.item(i).setSelected(True)
+                n += 1
+        self.status(f"Selected {n} object(s) smaller than {limit} px: press Delete to remove them")
+
+    def object_menu(self, pos):
+        s = self.session
+        if s is None or self.object_list.itemAt(pos) is None:
+            return
+        rows = self.selected_objects()
+        m = QtWidgets.QMenu(self)
+        m.addAction(f"Delete ({len(rows)})", self.delete_active)
+        sub = m.addMenu("Set class")
+        for key, c in [(n, c) for n, c in enumerate(CLICKABLE, start=1)] + [(0, 0)]:
+            sub.addAction(swatch(c), f"{key}  {CLASS_NAMES[c]}",
+                          lambda c=c: (s.set_classes(self.selected_objects(), c), self.refresh()))
+        m.exec(self.object_list.mapToGlobal(pos))
 
     def toggle_prior(self):
         self.show_prior = self.act_prior.isChecked()

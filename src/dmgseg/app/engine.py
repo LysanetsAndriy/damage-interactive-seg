@@ -23,7 +23,7 @@ from dmgseg.classhead.features import CARD_SIZE, REFINED, card
 from dmgseg.classhead.mlp import CardHead, predict
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE, class_ranking, fit_prior
-from dmgseg.tool.lasso import grab, polygon_mask, stroke_points
+from dmgseg.tool.lasso import grab, loop_object, polygon_mask, stroke_points
 from dmgseg.tool.prelabel import prelabel as _prelabel
 
 OTHER = 0
@@ -50,6 +50,10 @@ class Obj:
     logits: np.ndarray | None = None
     pending: bool = False             # class not yet known (prior still running)
     auto: bool = False                # created by the automatic pre-label
+    # True while the mask is exactly SAM's answer to `points`/`logits`; then a
+    # Shift/Option click re-asks SAM for the whole object. Otherwise (pre-label
+    # blobs, exact edits, clipped or reloaded masks) clicks edit the mask locally.
+    sam_valid: bool = True
 
     @property
     def label(self):
@@ -123,7 +127,8 @@ class Session:
         n = 0
         for p in _prelabel(self.prior, self.clicker, **kw):
             o = Obj(mask=p.mask, ranking=[], sam_score=p.sam_score, cand_type=REFINED, click_no=1,
-                    points=p.points, labels=p.labels, logits=p.logits, auto=True)
+                    points=p.points, labels=p.labels, logits=mask_to_logits(p.mask), auto=True,
+                    sam_valid=False)
             if use_head and self.head is not None:
                 o.ranking = self._ranking(o)
             else:
@@ -182,6 +187,10 @@ class Session:
         self._snapshot()
         o = self.objects[index]
         c = self.clicker
+        if not o.sam_valid:
+            self._local_edit(o, x, y, positive)
+            self.active = index
+            return index
         c.points, c.labels, c.logits = list(o.points), list(o.labels), o.logits
         mask = c.click(x, y, positive)
         o.mask, o.points, o.labels, o.logits = mask, list(c.points), list(c.labels), c.logits.copy()
@@ -192,9 +201,9 @@ class Session:
         return index
 
     # -- drawing -------------------------------------------------------------
-    def _add(self, mask, prior_class, sam_score, points, labels, click_no=1):
+    def _add(self, mask, prior_class, sam_score, points, labels, click_no=1, sam_valid=False):
         o = Obj(mask=mask, ranking=[], sam_score=sam_score, cand_type=REFINED, click_no=click_no,
-                points=list(points), labels=list(labels), logits=mask_to_logits(mask))
+                points=list(points), labels=list(labels), logits=mask_to_logits(mask), sam_valid=sam_valid)
         if prior_class is not None:
             o.ranking = [prior_class] + [c for c in CLICKABLE if c != prior_class] + CYCLE_END
         else:
@@ -203,13 +212,22 @@ class Session:
         self.objects.append(o)
         return len(self.objects) - 1
 
-    def lasso(self, polygon):
-        """A loop drawn around things: grab the objects inside (tool/lasso.py).
+    def lasso(self, polygon, group=False):
+        """A loop drawn around something. Default: that one object, shaped by SAM
+        and chosen by the loop (tool/lasso.loop_object). group=True (Cmd + loop):
+        every object the prior finds inside (tool/lasso.grab).
         Returns the new object indices (one undo step)."""
         region = polygon_mask(polygon, self.h, self.w)
         if region.sum() < 16:
             return []
         self._snapshot()
+        if not group:
+            mask, score, pts, labels, from_sam = loop_object(region, self.clicker)
+            i = self._add(mask, None, score, pts, labels, sam_valid=from_sam)
+            if from_sam:
+                self.objects[i].logits = self.clicker.logits.copy()
+            self.active = i
+            return [i]
         lm = self.label_map()
         new = []
         for g in grab(region, self.prior, self.clicker, lm):
@@ -241,6 +259,13 @@ class Session:
             self.active = len(self.objects) - 1
             return self.active
         o = self.objects[index]
+        if not o.sam_valid:                   # local: add / remove the piece along the line
+            piece = c.prompt(pts, [1] * len(pts))
+            o.mask = (o.mask | piece) if positive else (o.mask & ~piece)
+            o.logits, o.cand_type = mask_to_logits(o.mask), REFINED
+            c.reset_object()
+            self.active = index
+            return index
         logits = o.logits if o.logits is not None else mask_to_logits(o.mask)
         mask = c.prompt(list(o.points) + pts, list(o.labels) + [int(positive)] * len(pts), logits)
         o.mask, o.points, o.labels, o.logits = mask, list(c.points), list(c.labels), c.logits.copy()
@@ -268,7 +293,7 @@ class Session:
         for i in targets:
             o = self.objects[i]
             o.mask = (o.mask | region) if add else (o.mask & ~region)
-            o.logits, o.cand_type = mask_to_logits(o.mask), REFINED
+            o.logits, o.cand_type, o.sam_valid = mask_to_logits(o.mask), REFINED, False
         keep = [i for i, o in enumerate(self.objects) if o.mask.any()]
         if len(keep) < len(self.objects):
             active = self.objects[index] if index is not None and index in keep else None
@@ -283,6 +308,31 @@ class Session:
         self.active = i
         return i
 
+    def _local_edit(self, o, x, y, positive):
+        """Shift/Option click on a mask that is not SAM's own: SAM segments the
+        piece under the cursor (one click, 3 candidates) and only that piece is
+        added to / removed from the mask; the rest of the mask stays as it is."""
+        c = self.clicker
+        c.reset_object()
+        c.click(x, y, True)
+        masks, scores = c.candidates
+        area = o.mask.sum()
+        limit = area if positive else 0.6 * area      # a piece, not a whole new object
+        ok = [k for k in range(len(masks)) if masks[k].sum() <= limit]
+        k = max(ok, key=lambda k: scores[k]) if ok else int(np.argmin([m.sum() for m in masks]))
+        o.mask = (o.mask | masks[k]) if positive else (o.mask & ~masks[k])
+        o.logits, o.cand_type = mask_to_logits(o.mask), REFINED
+        c.reset_object()
+
+    def delete_many(self, indices):
+        """Remove several objects in one undo step."""
+        drop = set(indices)
+        if not drop:
+            return
+        self._snapshot()
+        self.objects = [o for i, o in enumerate(self.objects) if i not in drop]
+        self.active = None
+
     def next_class(self, index):
         """Right click on an object: the next class in its ranking."""
         self._snapshot()
@@ -295,6 +345,15 @@ class Session:
         self._snapshot()
         self.objects[index].manual = class_id
         self.active = index
+
+    def set_classes(self, indices, class_id):
+        """Set the class of several objects in one undo step."""
+        if not indices:
+            return
+        self._snapshot()
+        for i in indices:
+            self.objects[i].manual = class_id
+        self.active = indices[-1]
 
     def delete(self, index):
         self._snapshot()
@@ -333,7 +392,8 @@ class Session:
             self.objects.append(Obj(mask=mask, ranking=d["ranking"], choice=d["choice"], manual=d["manual"],
                                     sam_score=d["sam_score"], cand_type=d["cand_type"], click_no=d["click_no"],
                                     points=[tuple(p) for p in d["points"]], labels=d["labels"],
-                                    logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"]))
+                                    logits=mask_to_logits(mask), pending=d["pending"], auto=d["auto"],
+                                    sam_valid=False))
         self.prelabeled = state.get("prelabeled", False)
         self.active, self._undo = None, []
 

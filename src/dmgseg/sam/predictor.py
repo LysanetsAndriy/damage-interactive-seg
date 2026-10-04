@@ -98,6 +98,18 @@ class SamClicker:
         self.last_score = float(scores[0])
         return masks[0].astype(bool)
 
+    def predict_raw(self, points, labels, multimask=False):
+        """Masks, scores, low-res logits for a prompt, without changing the state."""
+        with torch.inference_mode():
+            masks, scores, logits = self.predictor.predict(
+                point_coords=np.array(points, dtype=np.float32), point_labels=np.array(labels),
+                multimask_output=multimask)
+        return masks.astype(bool), scores, logits
+
+    def set_state(self, points, labels, logits, score):
+        self.points, self.labels = [tuple(p) for p in points], list(labels)
+        self.logits, self.last_score = logits, float(score)
+
     def choose_index(self, k):
         """After the first click: continue from candidate k instead of the picked one."""
         masks, scores = self.candidates

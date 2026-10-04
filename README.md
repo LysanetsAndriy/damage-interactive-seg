@@ -39,13 +39,18 @@ the DINOv2 prior is cached there and pre-computed for the next images in the
 background; Page Up/Down switch images; File > Export CVAT XML exports the folder
 (masks: exact; polygons: outlines) for CVAT or the training parser.
 
-Drawing (left-drag on the image; the stroke is yellow / green / red while drawing):
-- **loop** around things: grabs the objects inside it (prior blobs snapped by SAM;
-  a building you only crossed is context and skipped; merged window rows are split).
-  If nothing inside is recognized, the loop itself becomes an object.
-- **line** over one thing: one object through points along the line (long thin things).
+Drawing (left-drag on the image; the stroke is yellow / cyan / green / red while drawing):
+- **loop** around a thing: that object. SAM proposes shapes (loop box, points inside,
+  "not this" points outside) and the one that matches the loop best wins.
+- **Cmd + loop**: every object the prior finds inside (a group of windows).
+- **line** over one thing: one object through points along the line.
 - **Shift / Option + loop**: add / cut exactly that area (pixel-precise edits).
 - **Shift / Option + line**: grow / shrink the active object with SAM along the line.
+- On pre-label objects (and after exact edits) Shift / Option clicks are local: only
+  the piece under the cursor is added / removed. Option+click acts on the object under
+  the cursor.
+- Objects list: multi-select, right click = Delete / Set class, Backspace deletes the
+  selection, "Select tiny" selects objects < 50 px.
 
 A Windows-98-style desktop tool. Left click: new object (SAM mask, class and mask
 chosen by class head A); right click / Ctrl+click: next class; Shift+click: grow;

@@ -1,6 +1,7 @@
 """Headless check of the drawing gestures with real mouse events on the canvas:
-a loop around a group of windows (grab), a scribble (one object), Shift+loop
-(exact add) and Option+loop (exact cut). Saves artifacts/figures/app_lasso.png
+a loop around one window (one object), Cmd+loop around a group of windows (grab),
+a scribble (one object), Shift+loop (exact add), Option+loop (exact cut), an
+Option+click on a pre-label object (local cut), multi-delete from the list. Saves artifacts/figures/app_lasso.png
 (mid-drawing) and app_lasso_result.png."""
 import functools
 import os
@@ -73,9 +74,15 @@ def main():
     union = np.any([wins[j] for j in near], axis=0)
     ys, xs = np.nonzero(union)
     cx, cy, rx, ry = xs.mean(), ys.mean(), (xs.max() - xs.min()) * 0.65 + 10, (ys.max() - ys.min()) * 0.65 + 10
-    draw(app, win.canvas, ring(cx, cy, rx, ry), shot="artifacts/figures/app_lasso.png")
-    print(f"loop around {len(near)} GT windows -> {len(s.objects)} objects: "
-          f"{[CLASS_NAMES[o.label] for o in s.objects]} | status: {win.msg.text()}")
+    one = wins[k]
+    oy, ox = np.nonzero(one)
+    draw(app, win.canvas, ring(ox.mean(), oy.mean(), (ox.ptp() / 2) * 1.3 + 4, (oy.ptp() / 2) * 1.3 + 4))
+    o = s.objects[-1]
+    iou = (o.mask & one).sum() / (o.mask | one).sum()
+    print(f"loop around one window -> {CLASS_NAMES[o.label]}, IoU with it {iou:.2f} | {win.msg.text()}")
+    draw(app, win.canvas, ring(cx, cy, rx, ry), QtCore.Qt.ControlModifier, shot="artifacts/figures/app_lasso.png")
+    print(f"Cmd+loop around {len(near)} GT windows -> {len(s.objects) - 1} objects: "
+          f"{[CLASS_NAMES[o.label] for o in s.objects[1:]]} | status: {win.msg.text()}")
     n = len(s.objects)
     y0 = int(ys.max() + 2 * ry)
     draw(app, win.canvas, [(cx - rx, min(y0, s.h - 5)), (cx, min(y0, s.h - 5)), (cx + rx, min(y0, s.h - 5))])
@@ -89,6 +96,22 @@ def main():
     win.grab().save("artifacts/figures/app_lasso_result.png")
     s.undo(); s.undo()
     print("two undos restore the scribble object:", int(s.objects[-1].mask.sum()) == a0)
+    # pre-label, then an Option+click on a big auto object cuts only a piece
+    win.run_prelabel()
+    big = max((i for i, o in enumerate(s.objects) if o.auto), key=lambda i: s.objects[i].mask.sum())
+    m = s.objects[big].mask
+    yy, xx = np.nonzero(m)
+    j = len(yy) // 2
+    before = int(m.sum())
+    win.on_click(int(xx[j]), int(yy[j]), QtCore.Qt.LeftButton, QtCore.Qt.AltModifier)
+    print(f"Option+click on auto object #{big + 1} ({CLASS_NAMES[s.objects[big].label]}): "
+          f"{before} -> {int(s.objects[big].mask.sum())} px | {win.msg.text()}")
+    n = len(s.objects)
+    win.refresh(save=False)
+    win.select_tiny(limit=500)
+    k = len(win.object_list.selectedItems())
+    win.delete_active()
+    print(f"select < 500 px + Delete: {n} -> {len(s.objects)} objects ({k} selected)")
 
 
 if __name__ == "__main__":
