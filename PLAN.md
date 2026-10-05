@@ -292,8 +292,17 @@ Measured (validation, 44 images):
 Built: hover preview (View > H; ~0.29 s after the cursor rests, == the click's mask
 and class 8/8), uncertain-areas spotlight (View > U), faster cards (ring via
 distance transform: 2.6x per card, 12x on large objects).
-Running: copy-paste (+ a 2nd B2b seed for the noise level), SAM encoder LoRA.
-Waiting: SAM 3 access (gated, needs "Request access" on HF).
+- **SAM 3** (848M, transformers 5.18 on molab; does not run on the Intel Mac: transformers 5
+  needs torch >= 2.5, the last Intel-Mac torch is 2.2.2). Phrases chosen on the fold-0
+  dev images. Text prompts -> 6-class map: 0.363 global mIoU (prior 0.611; Roof 0.106);
+  fusion with the prior 0.5/0.5: 0.6157 (+0.4) -> not worth it.
+  Exemplar "find all similar" (one GT broken window as a box): 81 % of the other broken
+  windows found but 33 extra detections per image (intact windows); filtered by the
+  prior's Broken Window probability >= 0.2: 52 % found, 7 extra per image (Cmd+loop
+  grab today: 57 %, 1.5 extra per loop). Damage: 23 %. -> not integrated.
+- Second B2b seed (seed 7): 0.6246 val crop mIoU vs 0.6278 (seed 1212): crop-level
+  seed noise ~0.3 points.
+- Copy-paste (context-aware, rare classes): 0.6264 val crop mIoU -> no gain.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
