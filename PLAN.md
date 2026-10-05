@@ -263,6 +263,38 @@ Results (full validation images, fixed labels, global metrics; 2026-10-05):
   cost (k-fold priors, cards, head A, license). B2b stays the prior; the code and
   configs stay in the repo as a recorded negative result.
 
+### 0.6j Research round: what else improves the prior, the tool and the labels (2026-10-05)
+Sources surveyed: SAM 3 (concept prompts: text / exemplar -> all instances; 848M,
+gated), interactive-seg SOTA (FocSAM, SAM-REF, OIS, SkipClick), HQ-SAM, SAMRefiner,
+EoMT / Mask2Former+ViT-Adapter (decoder engineering adds little once the backbone
+is strong), UniMatch V2 (semi-supervised, DINOv2), copy-paste augmentation,
+ensemble distillation, active learning / label correction (ESA, A2LC), CVAT/Carve UX.
+
+Measured (validation, 44 images):
+- TTA, B2b: flip 0.6068, flip + scales 0.75/1.25 0.6087 vs 0.6072 -> no gain.
+- **Ensemble of our DINOv2 priors (B2b + P2 640->644 + P3 800->518): 0.6275 global
+  mIoU (+2.0), mF1 0.761 (+1.7), Roof +5.6, Br. Window +2.1, Building +2.1**; all 5
+  DINOv2 models 0.6256. No training needed; 3x prior compute.
+- Image-level (draft + simulated corrections, fine-tuned SAM, head A on B2b prior):
+  ensemble draft 0.626 vs 0.613 at 0 interactions, 0.664 vs 0.644 at 5, equal
+  (0.679) at 10, 0.696 vs 0.694 at 20 -> a better start, same end point.
+- Prior uncertainty as an error detector: AUROC 0.785; the 15 % least certain
+  pixels of an image hold 52 % of its errors (68 % per-image mean) -> app feature.
+- Head A + DINOv2-S crop embedding of the object (GT box, optimistic): top-1 80.9
+  -> 82.3 %, but first-click IoU 0.621 -> 0.665 shows the GT box leaks; an honest
+  version gains < 1.4 points -> not worth a card rebuild.
+- Head A confusions: Damage <-> Broken Window dominates (1028 of 1610 errors);
+  calibrated (>= 0.9 confidence: 92 % right); top-2 93.4 %.
+- Label audit: 31 / 1314 val objects (2.4 %) where head A disagrees at >= 85 %
+  confidence; 30 are Damage <-> Broken Window, mostly empty window openings that
+  are labeled either way -> a labeling rule is needed (label noise, not model error).
+- SAM on the Mac: decoder 57-60 ms per prompt (256 px), 85-118 ms with full-size masks.
+Built: hover preview (View > H; ~0.29 s after the cursor rests, == the click's mask
+and class 8/8), uncertain-areas spotlight (View > U), faster cards (ring via
+distance transform: 2.6x per card, 12x on large objects).
+Running: copy-paste (+ a 2nd B2b seed for the noise level), SAM encoder LoRA.
+Waiting: SAM 3 access (gated, needs "Request access" on HF).
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
