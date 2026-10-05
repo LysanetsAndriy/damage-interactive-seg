@@ -226,6 +226,24 @@ prior: in some images it calls the windows "Building" (download11: 92 %) or
 predicts a whole window row as one solid band. Tried and rejected: skipping blobs
 by "covers the loop edge" (single-loop IoU 0.68 -> 0.64 on the smoke set).
 
+### 0.6i DINOv3 backbones for the prior (started 2026-10-05, molab k_queue)
+Finding while reading `unet_dinov2.py`: the paper's "U-Net" has no high-resolution
+path. All four skips are taps of one ViT, so they share its 37x37 grid (1/14); the
+decoder's "upsampling" between them is 37 -> 37, and the real upsampling is a blind
+x14 at the end. Masks are blobby; thin classes (Roof strips, frames) suffer.
+DINOv3 (Meta, Aug 2025): 7B teacher on 1.7B images, Gram anchoring keeps the dense
+features sharp; distilled ViT-L/16 has the same size as DINOv2 ViT-L/14 (303M,
+24 x 1024, CLS + 4 registers) but patch 16 + RoPE and a high-res phase (global crops
+512/768, stable to 4K). ADE20k linear: DINOv3 ViT-L/16 54.9 (model card) vs DINOv2
+ViT-L/14 47.7 (DINOv2 paper). Runs (B2b recipe, 640 px crops at full resolution):
+- V3-640: DINOv3 ViT-L/16 in the paper's decoder, taps (1,7,12,20) - backbone swap
+- V3-640-stem: ViT taps (5,11,17,23) fused at 1/16 + CNN stem skips at 1/8, 1/4, 1/2
+- V3-CNX: DINOv3 ConvNeXt-L pyramid encoder, U-Net skips at 1/4..1/16
+GPU check (batch 16, 640 px): 0.52 / 0.59 / 0.34 s per step, 42 / 44 / 32 GB.
+Decision rule: replace B2b (0.610 global mIoU) only for >= +1.5 points, because the
+k-fold priors, head A cards and the app's cached priors would all have to be redone.
+Results: (pending)
+
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
 Installed from source without its torch pin (README). Hiera-S on the i7 CPU: **image encoder 1.85 s, decoder ~67 ms per click**, so the app can use PyTorch directly; ONNX becomes optional. On a first sample, SAM's own score often picks the wrong one of the 3 first-click masks (Building 1-click IoU 0.01 → 0.63 with the best mask). **Choosing the mask with the DINOv2 prior** is a candidate extra contribution (E2b).
