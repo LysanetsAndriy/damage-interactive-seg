@@ -317,6 +317,9 @@ rule for empty window openings (Damage vs Broken Window) + review of the flagged
 objects. Promising but needs data: self-training / UniMatch-V2-style semi-supervision
 with unlabeled ground-level photos (ensemble as teacher). Dropped: DINOv3, TTA,
 copy-paste, crop embeddings for head A, SAM 3, SAM encoder LoRA.
+**Decision (user, 2026-10-05): model improvements are closed** - the remaining ideas
+(ensemble: too heavy for the Mac; cross-crop attention / global-map attention: about
++1-2 mIoU, near the seed noise) are not worth it. B2b + fine-tuned SAM + head A stay.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
