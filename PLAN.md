@@ -300,9 +300,11 @@ distance transform: 2.6x per card, 12x on large objects).
   windows found but 33 extra detections per image (intact windows); filtered by the
   prior's Broken Window probability >= 0.2: 52 % found, 7 extra per image (Cmd+loop
   grab today: 57 %, 1.5 extra per loop). Damage: 23 %. -> not integrated.
-- Second B2b seed (seed 7): 0.6246 val crop mIoU vs 0.6278 (seed 1212): crop-level
-  seed noise ~0.3 points.
-- Copy-paste (context-aware, rare classes): 0.6264 val crop mIoU -> no gain.
+- Second B2b seed (seed 7), full images: **0.6172 vs 0.6100** (crops 0.6246 vs 0.6278):
+  the same recipe moves ~0.7 global mIoU with the seed alone (Roof 0.509 -> 0.553).
+  So single-run differences below ~1 point are noise; DINOv3-stem's +1.35 is ~2x
+  that, the ensemble's +2.0 the only clear gain (partly plain variance reduction).
+- Copy-paste (context-aware, rare classes), full images: 0.6114 -> no gain.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
