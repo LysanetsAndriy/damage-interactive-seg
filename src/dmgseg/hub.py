@@ -31,6 +31,21 @@ def upload(local_path, path_in_repo, repo=paths.HF_REPO, message=None):
                         commit_message=message or f"Upload {path_in_repo}")
 
 
+def safe_upload(local_path, path_in_repo, retries=0, wait=600, log=print):
+    """upload() that never stops a training run: failures (e.g. HF's 128 commits
+    per hour limit) are logged; with retries > 0 it tries again every `wait` s."""
+    import time
+    for attempt in range(retries + 1):
+        try:
+            return upload(local_path, path_in_repo)
+        except Exception as e:  # noqa: BLE001 - network / rate limit
+            log(f"upload of {path_in_repo} failed ({type(e).__name__}); "
+                + (f"retry in {wait} s" if attempt < retries else "giving up"))
+            if attempt < retries:
+                time.sleep(wait)
+    return None
+
+
 def download_if_exists(path_in_repo, local_dir, repo=paths.HF_REPO):
     """Return the local path of a repo file, or None if it isn't on the Hub."""
     try:

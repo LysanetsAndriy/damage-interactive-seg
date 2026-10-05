@@ -256,16 +256,17 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
             # private storage limit (reached on 2026-10-02). So only the small history
             # goes up each epoch; best.pt/last.pt stay local. Uploading the 3.8 GB
             # resume checkpoint is opt-in (push_last_every > 0).
-            hub.upload(run_dir / "history.json", f"{hub_prefix}/history.json")
+            hub.safe_upload(run_dir / "history.json", f"{hub_prefix}/history.json")
             every = cfg.train.get("push_last_every", 0)
             final = epoch + 1 == cfg.train.epochs
             if every and not final and (epoch + 1) % every == 0:
-                hub.upload(run_dir / "last.pt", f"{hub_prefix}/last.pt")
+                hub.safe_upload(run_dir / "last.pt", f"{hub_prefix}/last.pt")
 
     # Weights after the last epoch (best.pt is chosen by validation loss, which can
     # favour an early epoch).
     torch.save(model.state_dict(), run_dir / "final.pt")
     if push:
-        hub.upload(run_dir / "final.pt", f"{hub_prefix}/final.pt")
+        hub.safe_upload(run_dir / "history.json", f"{hub_prefix}/history.json", retries=6)
+        hub.safe_upload(run_dir / "final.pt", f"{hub_prefix}/final.pt", retries=6)
 
     return run_dir

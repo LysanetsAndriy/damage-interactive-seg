@@ -18,6 +18,7 @@ from dmgseg.prior.compare import checkpoint_spec, compare_checkpoints, results_t
 from dmgseg.prior.train import train
 
 _threads = globals().get("_threads") or {}  # survives importlib.reload
+_last_upload = globals().get("_last_upload") or {}
 
 
 def status_writer(workdir, queue):
@@ -31,10 +32,16 @@ def _status(workdir, queue, **fields):
     state = json.loads(path.read_text()) if path.exists() else {}
     state.update(fields, updated=time.strftime("%Y-%m-%d %H:%M:%S"))
     path.write_text(json.dumps(state, indent=1))
-    try:
-        hub.upload(path, f"runs/{queue}/status.json")
-    except Exception as e:  # status is best-effort; never kill training over it
-        print("status upload failed:", e)
+    # HF allows 128 commits per hour per repo: upload the status at most every
+    # 5 minutes, and always when a job ends
+    now = time.time()
+    final = state.get("state") in ("done", "error")
+    if final or now - _last_upload.get(queue, 0) >= 300:
+        _last_upload[queue] = now
+        try:
+            hub.upload(path, f"runs/{queue}/status.json")
+        except Exception as e:  # status is best-effort; never kill training over it
+            print("status upload failed:", e)
 
 
 def _final_on_hub(run_name):
@@ -65,7 +72,7 @@ def run_queue(queue, config_paths, workdir, embed_model, embed_fn, device, basel
         _status(workdir, queue, state="comparing")
         out = workdir / "runs" / queue / "comparison.json"
         results = compare_checkpoints({**baselines, **finals}, embed_model, device, out)
-        hub.upload(out, f"runs/{queue}/comparison.json")
+        hub.safe_upload(out, f"runs/{queue}/comparison.json", retries=6)
         _status(workdir, queue, state="done", table=results_table(results, "fixed_labels"))
     except Exception:
         _status(workdir, queue, state="error", error=traceback.format_exc()[-3000:])
