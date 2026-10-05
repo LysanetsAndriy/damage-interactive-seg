@@ -117,3 +117,38 @@ def tta_job(workdir, device, status=None):
     if status:
         status(state="done", table=results_table(results))
     return results
+
+
+def cache_val_priors(workdir, device, runs=("p2", "p3"), status=None):
+    """Full-image priors of the validation images for other runs (as kfold.py does
+    for B2b), saved to priors/<run_name>/ locally and on the Hub, so ensembles can
+    be evaluated in the tool's image-level simulation on the Mac."""
+    from dmgseg import hub
+    from dmgseg.config import load_config
+    from dmgseg.prior.embedding import load_embedding_model
+    from dmgseg.prior.kfold import save_prior
+    from dmgseg.prior.train import split_annotations
+    from dmgseg.prior.unet_dinov2 import load_prior_model
+    workdir = Path(workdir)
+    _, val = split_annotations()
+    embed_model = load_embedding_model(device)
+    for r in runs:
+        cfg = load_config(paths.PROJECT_ROOT / "configs" / f"prior_dinov2_6c_{r}.yaml")
+        ev = dict(cfg.get("eval", {}))
+        ev.setdefault("model_input", cfg.data.model_input)
+        w = hub.download_if_exists(f"runs/{cfg.run_name}/final.pt", workdir)
+        model = load_prior_model(w, device, img_size=cfg.model.get("img_size"))
+        out = workdir / "priors" / cfg.run_name
+        out.mkdir(parents=True, exist_ok=True)
+        for k, ann in enumerate(val):
+            image = Image.open(paths.IMAGES_DIR / ann.name).convert("RGB")
+            with torch.no_grad():
+                probs, _ = predict_probs(model, embed_model, image, device=device, batch_size=8, **ev)
+            save_prior(out / f"{ann.name}.npz", probs)
+            if status:
+                status(state="caching", stage=f"{cfg.run_name} {k + 1}/{len(val)}")
+        from huggingface_hub import HfApi
+        HfApi().upload_folder(folder_path=str(out), path_in_repo=f"priors/{cfg.run_name}",
+                              repo_id=paths.HF_REPO, repo_type="dataset")
+    if status:
+        status(state="done")
