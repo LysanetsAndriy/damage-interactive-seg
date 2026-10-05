@@ -97,7 +97,7 @@ def main():
     s.undo(); s.undo()
     print("two undos restore the scribble object:", int(s.objects[-1].mask.sum()) == a0)
     # pre-label, then an Option+click on a big auto object cuts only a piece
-    win.run_prelabel()                                   # in the background now
+    win.run_prelabel(force=True)                         # Tools > Auto Pre-label (background)
     wait(app, lambda: s.prelabeled)
     big = max((i for i, o in enumerate(s.objects) if o.auto), key=lambda i: s.objects[i].mask.sum())
     m = s.objects[big].mask

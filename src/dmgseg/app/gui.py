@@ -57,7 +57,12 @@ Keys
   1-5   class of the selected objects, 0: Other (cut out of what is behind)
   Backspace / Delete   delete the selected objects;  {CTRL}+Z undo
   Page Up / Page Down, {CTRL}+Left / Right   previous / next image (folder)
-  {CTRL}+S save, {CTRL}+E export mask, {CTRL}+Shift+E export CVAT, {CTRL}+L pre-label
+  {CTRL}+S save, {CTRL}+E export mask, {CTRL}+Shift+E export CVAT
+  {CTRL}+L draft now, {CTRL}+Shift+L remove the untouched draft
+
+Auto pre-label box: on = draft objects from the DINO map (now and for each image);
+off = remove the untouched draft and label by hand (classes still come from DINO).
+Draft objects you edit or re-classify become yours and are never removed.
 
 On pre-label objects Shift/{ALT} clicks add/remove only the piece under the cursor.
 Linux: if the desktop uses {ALT}+drag to move windows, use Shift+right click to shrink."""
@@ -736,7 +741,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_uncertain.setToolTip("Dim everything except where the prior is least sure "
                                       "(about half of its mistakes are there)")
         t = mb.addMenu("&Tools")
-        t.addAction("&Auto Pre-label", self.run_prelabel, "Ctrl+L")
+        t.addAction("&Auto Pre-label (draft now)", lambda: self.run_prelabel(force=True), "Ctrl+L")
+        t.addAction("&Remove Draft", self.remove_draft, "Ctrl+Shift+L")
         h = mb.addMenu("&Help")
         h.addAction("&Shortcuts", self.show_shortcuts, QtGui.QKeySequence.HelpContents)
         h.addAction("&About", lambda: QtWidgets.QMessageBox.about(
@@ -770,10 +776,16 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addSeparator()
         self.auto_check = QtWidgets.QCheckBox("Auto pre-label")
         self.auto_check.setChecked(True)
-        self.auto_check.setToolTip("When the prior is ready, draft all objects automatically (Tools > Auto Pre-label)")
+        self.auto_check.setToolTip(
+            "On: draft objects from the DINO map automatically (now and for every image).\n"
+            "Off: remove the untouched draft (Ctrl+Z brings it back) and label by hand;\n"
+            "clicked objects still get their class from DINO and the class head.\n"
+            "Draft objects you edit or re-classify become yours and are never removed.")
+        self.auto_check.toggled.connect(self.on_auto_toggled)
         tb.addWidget(self.auto_check)
         tb.addSeparator()
         cb = QtWidgets.QCheckBox("Prior map")
+        cb.setToolTip("View only: show DINO's raw class map instead of your objects (P)")
         cb.toggled.connect(lambda on: (self.act_prior.setChecked(on), self.toggle_prior()))
         self.prior_check = cb
         tb.addWidget(cb)
@@ -929,6 +941,38 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.auto_check.isChecked() and not self.session.prelabeled:
             self.run_prelabel()
 
+    def on_auto_toggled(self, on):
+        """The Auto pre-label box acts at once: off removes the untouched draft of
+        this image (undoable) and stops drafting; on drafts this image now."""
+        s = self.session
+        if not on:
+            self._drafting = None                # a draft still being computed is dropped
+            self._busy(False)
+            if s is not None and s.draft_count():
+                n = s.remove_draft()
+                self.status(f"Auto pre-label off: removed {n} untouched draft objects (Ctrl+Z restores). "
+                            "Clicks still get their class from DINO.")
+                self.refresh()
+            else:
+                self.status("Auto pre-label off: label by hand (classes still come from DINO)")
+        elif s is not None and s.prior is not None and not s.draft_count():
+            self.run_prelabel(force=True)
+
+    def remove_draft(self):
+        s = self.session
+        if s is not None:
+            n = s.remove_draft()
+            self.status(f"Removed {n} untouched draft objects (Ctrl+Z restores)" if n else "No draft objects")
+            self.refresh()
+
+    def _busy(self, on):
+        """Moving progress bar while the draft is computed."""
+        if on:
+            self.progress.setRange(0, 0)
+        else:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(100)
+
     # -- folder: background priors, saving, list -------------------------------------
     def _prefetch_done(self, name, probs):
         self._update_image_item(name)
@@ -991,18 +1035,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.prefetcher.stop()
         super().closeEvent(e)
 
-    def run_prelabel(self):
+    def run_prelabel(self, force=False):
         """The automatic draft, made in a background thread (it takes seconds on big
-        images); clicking keeps working meanwhile and the draft is added when ready."""
+        images); clicking keeps working meanwhile and the draft is added when ready.
+        force: also when this image had a draft before (Tools menu, re-ticking the box)."""
         s = self.session
         if s is None or s.prior is None:
             self.status("Pre-label needs the prior: wait for 'Prior: done'")
             return
         if getattr(self, "_drafting", None) is s:
             return
+        if s.draft_count() and force:
+            s.remove_draft()                     # replace, never duplicate, the draft
         self._drafting = s
         features, prior, t0 = self.models.clicker.features(), s.prior, time.time()
-        self.status("Auto pre-label: drafting the objects in the background (you can click meanwhile)...")
+        self._busy(True)
+        big = s.h * s.w > 2_500_000
+        self.status("Auto pre-label: drafting objects from the DINO map"
+                    + (" (large image: ~10 s)" if big else "") + "... you can click meanwhile")
 
         def work(progress=None):
             from dmgseg.tool.prelabel import prelabel
@@ -1012,10 +1062,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 return prelabel(prior, d, keep_small_px=25)    # no 1-20 px specks
 
         def done(props):
-            if getattr(self, "_drafting", None) is s:
-                self._drafting = None
-            if self.session is not s:            # the user moved to another image
-                return
+            if getattr(self, "_drafting", None) is not s:
+                return                           # cancelled (box unticked) or replaced
+            self._drafting = None
+            self._busy(False)
+            if self.session is not s or not (force or self.auto_check.isChecked()):
+                return                           # moved to another image / automatic draft, box unticked
             n = s.apply_prelabel(props)
             self.status(f"Auto pre-label: {n} objects in {time.time() - t0:.0f} s. "
                         "Correct with clicks; Ctrl+Z removes the draft")
@@ -1284,6 +1336,9 @@ def main(argv=None):
     app.setApplicationName(TITLE)
     apply_classic_style(app)
     win = MainWindow()
+    settings = QtCore.QSettings("dmgseg", TITLE)
+    win.auto_check.setChecked(settings.value("auto_prelabel", True, type=bool))
+    win.auto_check.toggled.connect(lambda on: settings.setValue("auto_prelabel", on))
     win.show()
     if len(sys.argv) > 1:
         QtCore.QTimer.singleShot(0, lambda: _open_when_ready(win, sys.argv[1]))

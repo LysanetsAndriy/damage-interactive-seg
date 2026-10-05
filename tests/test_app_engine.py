@@ -301,3 +301,21 @@ def test_old_saves_get_times_from_the_list_order():
     s.load_state(st)
     lm = s.label_map()
     assert lm[17, 17] == 4 and lm[25, 25] == 1
+
+
+def test_remove_draft_keeps_what_the_user_touched():
+    from dmgseg.app.engine import Obj
+    h, w = 40, 50
+    s = Session(np.zeros((h, w, 3), np.uint8), DrawClicker(h, w), head=None)
+    def blob(y, x):
+        m = np.zeros((h, w), bool); m[y:y + 8, x:x + 8] = True; return m
+    s.objects = [Obj(mask=blob(2, 2), ranking=[1, 2, 3, 4, 5, 0], auto=True, sam_valid=False),
+                 Obj(mask=blob(2, 20), ranking=[4, 1, 2, 3, 5, 0], auto=True, sam_valid=False),
+                 Obj(mask=blob(20, 20), ranking=[3, 1, 2, 4, 5, 0], auto=True, sam_valid=False),
+                 Obj(mask=blob(20, 2), ranking=[1, 2, 3, 4, 5, 0])]          # clicked by the user
+    s.set_class(1, 3)                                  # re-classified -> the user's
+    s.edit_area([(20, 20), (30, 20), (30, 30), (20, 30)], add=True, index=2)   # edited -> the user's
+    assert s.draft_count() == 1
+    assert s.remove_draft() == 1 and len(s.objects) == 3 and not any(o.auto for o in s.objects)
+    s.undo()
+    assert s.draft_count() == 1 and len(s.objects) == 4

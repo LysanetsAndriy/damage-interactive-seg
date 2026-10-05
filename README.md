@@ -46,6 +46,13 @@ middle button pans. Previous/next image: Page Up/Down or Ctrl/Cmd+Left/Right.
 Shrink: Alt/Option+click or Shift+right click (for Linux desktops that use Alt+drag).
 Help > Shortcuts lists everything with the right key names for the system.
 
+**Auto pre-label** (toolbar box): on = a draft of all objects from the DINO map, made
+in the background (moving progress bar; ~10 s on very large photos); off = the
+untouched draft is removed (Ctrl+Z restores) and you label by hand - clicks still
+get their class from DINO and the class head. Draft objects you edit or re-classify
+become yours and stay. Tools > Remove Draft (Ctrl+Shift+L). The "Prior map" box is
+view-only (DINO's raw class map).
+
 Drawing (left-drag on the image; the stroke is yellow / cyan / green / red while drawing):
 - **loop** around a thing: that object. SAM proposes shapes (loop box, points inside,
   "not this" points outside) and the one that matches the loop best wins.

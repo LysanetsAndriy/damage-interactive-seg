@@ -72,7 +72,8 @@ class Obj:
     labels: list = field(default_factory=list)
     logits: np.ndarray | None = None
     pending: bool = False             # class not yet known (prior still running)
-    auto: bool = False                # created by the automatic pre-label
+    auto: bool = False                # an untouched object of the automatic draft (any user
+                                      # edit or class decision makes it the user's own)
     # True while the mask is exactly SAM's answer to `points`/`logits`; then a
     # Shift/Option click re-asks SAM for the whole object. Otherwise (pre-label
     # blobs, exact edits, clipped or reloaded masks) clicks edit the mask locally.
@@ -304,6 +305,7 @@ class Session:
             return None
         self._snapshot()
         o = self.objects[index]
+        o.auto = False
         c = self.clicker
         if not o.sam_valid:
             self._local_edit(o, x, y, positive)
@@ -378,6 +380,7 @@ class Session:
             self.active = len(self.objects) - 1
             return self.active
         o = self.objects[index]
+        o.auto = False
         if not o.sam_valid:                   # local: add / remove the piece along the line
             piece = c.prompt(pts, [1] * len(pts))
             o.mask = (o.mask | piece) if positive else (o.mask & ~piece)
@@ -412,6 +415,7 @@ class Session:
         for i in targets:
             o = self.objects[i]
             o.mask = (o.mask | region) if add else (o.mask & ~region)
+            o.auto = False
             o.logits, o.cand_type, o.sam_valid = mask_to_logits(o.mask), REFINED, False
         keep = [i for i, o in enumerate(self.objects) if o.mask.any()]
         if len(keep) < len(self.objects):
@@ -443,6 +447,19 @@ class Session:
         o.logits, o.cand_type = mask_to_logits(o.mask), REFINED
         c.reset_object()
 
+    def draft_count(self):
+        return sum(o.auto for o in self.objects)
+
+    def remove_draft(self):
+        """Remove the untouched automatic draft (one undo step); objects the user
+        edited or classified stay. Returns how many were removed."""
+        n = self.draft_count()
+        if n:
+            self._snapshot()
+            self.objects = [o for o in self.objects if not o.auto]
+            self.active = None
+        return n
+
     def delete_many(self, indices):
         """Remove several objects in one undo step."""
         drop = set(indices)
@@ -458,6 +475,7 @@ class Session:
 
     def _decide(self, o):
         o.decided = self._tick()
+        o.auto = False                        # the user took it over
 
     def next_class(self, index):
         """Right click on an object: the next class in its ranking."""
