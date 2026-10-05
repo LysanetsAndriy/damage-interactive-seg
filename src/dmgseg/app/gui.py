@@ -51,6 +51,7 @@ View
   {CTRL}+plus / minus / 0     zoom in / out / 100 %;  F: fit to window
   Space+drag, middle drag   pan;  P: show the prior map
   U                         spotlight the areas where the prior is least sure
+  H                         hover preview: outline of what a click would select
 
 Keys
   1-5   class of the selected objects, 0: Other (cut out of what is behind)
@@ -173,6 +174,7 @@ class Models:
         self.sam_finetuned = sam_ft.exists()
         self.encoder = self.clicker.twin()   # reads images in the background
         self.drafter = self.clicker.twin()   # makes the automatic draft in the background
+        self.hover = self.clicker.twin()     # hover preview (background thread)
         progress and progress(1, steps)
         # head A trained on masks of the same SAM the app uses
         name = "head_a_samft.pt" if self.sam_finetuned else "head_a.pt"
@@ -268,6 +270,66 @@ class PriorPrefetcher:
                     self.on_done(name, None)
 
 
+class HoverWorker:
+    """Computes the hover preview in its own thread. Only the latest cursor position
+    matters: requests made while one is running replace each other."""
+
+    def __init__(self, models, on_result):
+        self.models, self.on_result = models, on_result
+        self.cv = threading.Condition()
+        self.request = None                  # (session, features, x, y, token)
+        self.features = None                 # features currently set on the hover clicker
+        threading.Thread(target=self._loop, name="hover_preview", daemon=True).start()
+
+    def submit(self, session, features, x, y, token):
+        with self.cv:
+            self.request = (session, features, x, y, token)
+            self.cv.notify()
+
+    def _loop(self):
+        while True:
+            with self.cv:
+                while self.request is None:
+                    self.cv.wait()
+                session, features, x, y, token = self.request
+                self.request = None
+            try:
+                if features is not self.features:
+                    self.models.hover.set_features(features)
+                    self.features = features
+                with torch_inference():
+                    mask, cls = session.preview(x, y, self.models.hover)
+                self.on_result(token, mask, cls)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+
+def torch_inference():
+    import torch
+    return torch.inference_mode()
+
+
+def mask_path(mask, max_points=4000):
+    """QPainterPath of a mask's outer contours (computed on its bounding box)."""
+    import cv2
+    rows, cols = np.flatnonzero(mask.any(1)), np.flatnonzero(mask.any(0))
+    path = QtGui.QPainterPath()
+    if len(rows) == 0:
+        return path
+    y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+    cnts, _ = cv2.findContours(mask[y0:y1, x0:x1].astype(np.uint8), cv2.RETR_EXTERNAL,
+                               cv2.CHAIN_APPROX_SIMPLE, offset=(int(x0), int(y0)))
+    for c in cnts:
+        c = c[:, 0, :]
+        if len(c) > max_points:
+            c = c[:: len(c) // max_points + 1]
+        if len(c) >= 2:
+            path.addPolygon(QtGui.QPolygonF([QtCore.QPointF(float(x) + .5, float(y) + .5) for x, y in c]))
+            path.closeSubpath()
+    return path
+
+
 # ----------------------------------------------------------------- canvas
 class Canvas(QtWidgets.QGraphicsView):
     """Shows the image. A left click (press + release without moving) emits
@@ -294,6 +356,19 @@ class Canvas(QtWidgets.QGraphicsView):
         self._press = None               # (screen pos, modifiers) of the left press
         self._path = self.scene().addPath(QtGui.QPainterPath())
         self._path.setZValue(10)
+        pen = QtGui.QPen(QtGui.QColor("#00e5ff"), 2, QtCore.Qt.DashLine)
+        pen.setCosmetic(True)
+        self._hover = self.scene().addPath(QtGui.QPainterPath(), pen)
+        self._hover.setZValue(9)
+        self._hover_label = self.scene().addSimpleText("")
+        self._hover_label.setBrush(QtGui.QColor("#00e5ff"))
+        self._hover_label.setPen(QtGui.QPen(QtGui.QColor("#000000"), 0.8))   # readable on any color
+        f = QtGui.QFont(self.font())
+        f.setBold(True)
+        f.setPointSizeF(f.pointSizeF() + 1)
+        self._hover_label.setFont(f)
+        self._hover_label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        self._hover_label.setZValue(11)
 
     def show_rgb(self, rgb, fit=False):
         h, w = rgb.shape[:2]
@@ -350,6 +425,21 @@ class Canvas(QtWidgets.QGraphicsView):
                 self.fit()
                 return True
         return super().viewportEvent(e)
+
+    left = QtCore.Signal()
+
+    def show_hover(self, path, text, x, y):
+        self._hover.setPath(path)
+        self._hover_label.setText(text)
+        self._hover_label.setPos(x + 2, y + 2)
+
+    def clear_hover(self):
+        self._hover.setPath(QtGui.QPainterPath())
+        self._hover_label.setText("")
+
+    def leaveEvent(self, e):
+        self.left.emit()
+        super().leaveEvent(e)
 
     def enterEvent(self, e):
         self.setFocus()                       # so Space (pan) reaches the canvas
@@ -494,6 +584,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas = Canvas()
         self.canvas.clicked.connect(self.on_click)
         self.canvas.drawn.connect(self.on_drawn)
+        self.canvas.moved.connect(self.on_hover)
+        self.canvas.left.connect(self.end_hover)
+        self._hover_timer = QtCore.QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(self._request_hover)
+        self._hover_xy, self._hover_token, self.hover_worker = None, 0, None
         self.canvas.moved.connect(lambda x, y: self.pos_label.setText(f" x={x} y={y} "))
 
         central = QtWidgets.QWidget()
@@ -581,7 +677,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 f"{CTRL}+loop: all objects inside\nLine: object along it\n"
                                 f"Shift/{ALT}+loop: add/cut area\n1-5: set class, 0: Other\n"
                                 f"Backspace: delete selected\n{CTRL}+wheel / pinch: zoom\n"
-                                f"Space+drag: pan")
+                                f"Space+drag: pan, H: hover preview")
         hint.setFrameShape(QtWidgets.QFrame.Panel)
         hint.setFrameShadow(QtWidgets.QFrame.Sunken)
         v.addWidget(hint)
@@ -622,6 +718,10 @@ class MainWindow(QtWidgets.QMainWindow):
         act_del.setShortcuts([QtGui.QKeySequence(QtCore.Qt.Key_Backspace), QtGui.QKeySequence.Delete])
         vmenu = mb.addMenu("&View")
         vmenu.addAction("Fit to &Window", self.canvas.fit, "F")
+        self.act_hover = vmenu.addAction("&Hover Preview", self.end_hover, "H")
+        self.act_hover.setCheckable(True)
+        self.act_hover.setChecked(True)
+        self.act_hover.setToolTip("Outline the object a click would select, before clicking")
         a = vmenu.addAction("&Slot Machine", lambda: self.slots_box.setVisible(not self.slots_box.isVisible()))
         a.setCheckable(True)
         a.setChecked(True)
@@ -772,6 +872,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_name = name
         self.image_path = path
         self.session = None
+        self.end_hover()
         image = np.asarray(Image.open(path).convert("RGB"))
         self.caption.setText(f"  {TITLE} - {path.name}")
         self.progress.setValue(0)
@@ -924,6 +1025,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -- interaction -------------------------------------------------------------
     def on_click(self, x, y, button, mods):
+        self.end_hover()
         s = self.session
         if s is None:
             return
@@ -963,6 +1065,42 @@ class MainWindow(QtWidgets.QMainWindow):
                                                else CLASS_NAMES[o.label]))
         self.time_label.setText(f" {1000 * (time.time() - t0):.0f} ms ")
         self.refresh()
+
+    # -- hover preview -------------------------------------------------------------
+    def on_hover(self, x, y):
+        self.end_hover(keep_timer=True)
+        if self.session is None or not self.act_hover.isChecked() or self.canvas._stroke is not None \
+                or QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton:
+            return
+        r = self.canvas.item.pixmap().rect()
+        if not (0 <= x < r.width() and 0 <= y < r.height()):
+            return
+        self._hover_xy = (x, y)
+        self._hover_timer.start(60)          # once the cursor rests a moment
+
+    def _request_hover(self):
+        if self.session is None or self._hover_xy is None:
+            return
+        if self.hover_worker is None:
+            self.hover_worker = HoverWorker(self.models, lambda *r: self._ui.emit(self._show_hover, r))
+        self._hover_token += 1
+        x, y = self._hover_xy
+        self.hover_worker.submit(self.session, self.models.clicker.features(), x, y,
+                                 (self._hover_token, self.session))
+
+    def _show_hover(self, token, mask, cls):
+        n, session = token
+        if n != self._hover_token or session is not self.session or self._hover_xy is None:
+            return                            # the cursor moved on meanwhile
+        x, y = self._hover_xy
+        self.canvas.show_hover(mask_path(mask), CLASS_NAMES[cls] if cls is not None else "", x, y)
+
+    def end_hover(self, keep_timer=False):
+        self._hover_token += 1
+        if not keep_timer:
+            self._hover_timer.stop()
+            self._hover_xy = None
+        self.canvas.clear_hover()
 
     def on_drawn(self, stroke, loop, mods):
         """A drawn stroke: loop = grab what is inside, open stroke = scribble.

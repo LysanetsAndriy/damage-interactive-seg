@@ -258,6 +258,20 @@ class Session:
         rank = {i: r for r, i in enumerate(paint_order(self.objects))}
         return max(hits, key=lambda i: rank[i])
 
+    def preview(self, x, y, clicker):
+        """What a left click at (x, y) would give, without changing anything:
+        -> (mask, class id or None). Same choice as new_object (SAM's 3 masks, the
+        head picks one); `clicker` is a twin holding this image's features, so the
+        preview can run in a background thread."""
+        masks, scores, _ = clicker.predict_raw([(x, y)], [1], multimask=True)
+        if self.head is not None and self.head_prior is not None:
+            cards = [card(m, self.head_prior, self.embed, float(s), k, 1) for k, (m, s) in enumerate(zip(masks, scores))]
+            probs, quality = self.head.score(cards)
+            k = int(np.argmax(quality))
+            return masks[k], CLICKABLE[int(np.argmax(probs[k]))]
+        k = int(np.argmax(scores))
+        return masks[k], (class_ranking(self.prior, masks[k])[0] if self.prior is not None else None)
+
     def new_object(self, x, y):
         """Left click: SAM's 3 candidates; the head picks the mask and the class."""
         self._snapshot()

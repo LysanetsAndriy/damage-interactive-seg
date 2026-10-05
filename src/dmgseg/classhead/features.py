@@ -38,10 +38,12 @@ def _ring(mask):
     h, w = mask.shape
     y0, y1 = max(0, ys.min() - r), min(h, ys.max() + r + 1)
     x0, x1 = max(0, xs.min() - r), min(w, xs.max() + r + 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
     sub = mask[y0:y1, x0:x1]
+    # distance to the mask <= r: the same disk dilation, but its cost does not grow
+    # with r (a 230 px elliptical kernel took ~60 ms on a large building)
+    dist = cv2.distanceTransform((~sub).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
     ring = np.zeros_like(mask)
-    ring[y0:y1, x0:x1] = cv2.dilate(sub.astype(np.uint8), kernel).astype(bool) & ~sub
+    ring[y0:y1, x0:x1] = (dist <= r) & ~sub
     return ring
 
 
