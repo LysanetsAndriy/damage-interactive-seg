@@ -223,10 +223,11 @@ def sam3_job(workdir, device, status=None, max_images=None):
         dev = [anns[n] for n in load_kfold()[0]["heldout"]][:max_images]
         val = [anns[n] for n in load_split()["val"]][:max_images]
         prior_dir = workdir / "priors" / paths.PRIOR_RUN
-        if not (prior_dir / f"{val[0].name}.npz").exists():
+        missing = [a.name for a in val if not (prior_dir / f"{a.name}.npz").exists()]
+        if missing:
             from huggingface_hub import snapshot_download
             snapshot_download(paths.HF_REPO, repo_type="dataset", local_dir=str(workdir),
-                              allow_patterns=[f"priors/{paths.PRIOR_RUN}/{a.name}.npz" for a in val])
+                              allow_patterns=[f"priors/{paths.PRIOR_RUN}/{n}.npz" for n in missing])
         status(state="loading SAM 3")
         t0 = time.time()
         model, proc = load(device)
