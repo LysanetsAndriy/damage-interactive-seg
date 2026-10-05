@@ -305,6 +305,18 @@ distance transform: 2.6x per card, 12x on large objects).
   So single-run differences below ~1 point are noise; DINOv3-stem's +1.35 is ~2x
   that, the ensemble's +2.0 the only clear gain (partly plain variance reduction).
 - Copy-paste (context-aware, rare classes), full images: 0.6114 -> no gain.
+- SAM 2.1-S encoder LoRA (r 8, qkv of all Hiera blocks) on top of the fine-tuned decoder,
+  val (1477 objects, 20 clicks): IoU@1 0.574 -> 0.590, NoC@85 6.27 -> 6.11, NoC@90
+  10.19 -> 10.09, fail@90 30.4 -> 29.4 %; every class slightly better. Small; adopting it
+  changes SAM's features that head A uses (cards rebuild + retrain) -> not adopted.
+
+Summary of the round. Adopted: hover preview, uncertainty spotlight, faster cards.
+Worth doing next: the ensemble prior for the draft (+2.0 global mIoU, the only gain
+clearly above the ~0.7 seed noise; 3x prior compute, in the background), a labeling
+rule for empty window openings (Damage vs Broken Window) + review of the flagged
+objects. Promising but needs data: self-training / UniMatch-V2-style semi-supervision
+with unlabeled ground-level photos (ensemble as teacher). Dropped: DINOv3, TTA,
+copy-paste, crop embeddings for head A, SAM 3, SAM encoder LoRA.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
