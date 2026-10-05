@@ -117,10 +117,15 @@ class CopyPaste:
     def __init__(self, bank, scale, p=0.5, max_objects=3, jitter=(0.7, 1.3), seed=None):
         self.bank = {c: v for c, v in bank.items() if v}
         self.scale, self.p, self.max_objects, self.jitter = scale, p, max_objects, jitter
-        self.rng = np.random.default_rng(seed)
+        self.seed, self.rng, self._pid = seed, np.random.default_rng(seed), None
 
     def __call__(self, image, mask):
+        import os
+
         import cv2
+        if self._pid != os.getpid():         # each DataLoader worker: its own stream
+            self._pid = os.getpid()
+            self.rng = np.random.default_rng([self.seed or 0, torch.initial_seed() % 2**32])
         if not self.bank or self.rng.random() >= self.p:
             return image, mask
         image, mask = image.copy(), mask.copy()
