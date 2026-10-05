@@ -258,9 +258,10 @@ Results (full validation images, fixed labels, global metrics; 2026-10-05):
 - Real skip connections are what helps: V3-640-stem +1.35 global mIoU, mF1 +1.1,
   Broken Window +4.3, Building +2.3, Damage +1.4; Roof -0.7 (still the weakest).
 - ConvNeXt-L U-Net: +0.4; faster (137 s/epoch vs 233) but no better.
-- +1.35 is just under the 1.5 bar, single seed (P1-P3 spread 0.605-0.619), so not
-  conclusive. Next: a 2nd seed of V3-640-stem, and DINOv2 + the same stem to
-  separate the stem's effect from the backbone's (an ablation for the paper).
+- +1.35 is just under the 1.5 bar, single seed (P1-P3 spread 0.605-0.619).
+- **Decision (user, 2026-10-05): DINOv3 dropped** - the gain is too small for the
+  cost (k-fold priors, cards, head A, license). B2b stays the prior; the code and
+  configs stay in the repo as a recorded negative result.
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
