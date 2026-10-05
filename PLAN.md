@@ -242,7 +242,25 @@ ViT-L/14 47.7 (DINOv2 paper). Runs (B2b recipe, 640 px crops at full resolution)
 GPU check (batch 16, 640 px): 0.52 / 0.59 / 0.34 s per step, 42 / 44 / 32 GB.
 Decision rule: replace B2b (0.610 global mIoU) only for >= +1.5 points, because the
 k-fold priors, head A cards and the app's cached priors would all have to be redone.
-Results: (pending)
+Results (full validation images, fixed labels, global metrics; 2026-10-05):
+
+| model | global mIoU | mF1 | paper mIoU | Other | Building | Roof | Damage | Br. Window | Dmg roof |
+|---|---|---|---|---|---|---|---|---|---|
+| paper model (518) | 0.6072 | 0.7440 | 0.4682 | 0.938 | 0.670 | 0.522 | 0.549 | 0.434 | 0.530 |
+| B2b (518) | 0.6100 | 0.7462 | 0.4787 | 0.935 | 0.681 | 0.509 | 0.559 | 0.439 | 0.537 |
+| B2b (640->518) | 0.6096 | 0.7461 | 0.4756 | 0.934 | 0.674 | 0.517 | 0.556 | 0.439 | 0.538 |
+| V3-640 (swap) | 0.6080 | 0.7436 | 0.4778 | 0.943 | 0.688 | 0.523 | 0.547 | 0.422 | 0.525 |
+| **V3-640-stem** | **0.6235** | **0.7570** | **0.4864** | 0.947 | 0.704 | 0.502 | 0.573 | **0.482** | 0.533 |
+| V3-CNX | 0.6139 | 0.7498 | 0.4694 | 0.935 | 0.681 | 0.527 | 0.558 | 0.450 | 0.533 |
+
+- The backbone alone gives nothing (V3-640 0.608 vs 0.610): DINOv3's better
+  linear-probe features do not survive full fine-tuning on 290 images.
+- Real skip connections are what helps: V3-640-stem +1.35 global mIoU, mF1 +1.1,
+  Broken Window +4.3, Building +2.3, Damage +1.4; Roof -0.7 (still the weakest).
+- ConvNeXt-L U-Net: +0.4; faster (137 s/epoch vs 233) but no better.
+- +1.35 is just under the 1.5 bar, single seed (P1-P3 spread 0.605-0.619), so not
+  conclusive. Next: a 2nd seed of V3-640-stem, and DINOv2 + the same stem to
+  separate the stem's effect from the backbone's (an ablation for the paper).
 
 ### 0.7 SAM 2.1 runs on the Mac with torch 2.2 (2026-10-01)
 
