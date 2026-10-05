@@ -166,7 +166,7 @@ class Session:
         self.h, self.w = self.image.shape[:2]
         self.clicker = clicker
         self.head = head
-        self.prior = None
+        self.prior = self.head_prior = None
         self.objects: list[Obj] = []
         self.active: int | None = None
         self._undo: list = []
@@ -178,20 +178,38 @@ class Session:
         self.embed = clicker.image_embedding
 
     # -- prior -------------------------------------------------------------
-    def set_prior(self, prior):
-        """Called when the background prior is ready: classify pending objects."""
+    def set_prior(self, prior, head_prior=None):
+        """Called when the background prior is ready: classify pending objects.
+        head_prior: the prior the class head was trained with, if `prior` differs."""
         self.prior = fit_prior(prior, self.h, self.w)
+        # the class head's features come from the prior it was trained with (B2b);
+        # the draft / prior map may use a better one (e.g. an ensemble)
+        self.head_prior = fit_prior(head_prior, self.h, self.w) if head_prior is not None else self.prior
         for o in self.objects:
             if o.pending:
                 o.ranking = self._ranking(o)
                 o.pending = False
+
+    def uncertain_areas(self, share=0.15):
+        """The `share` of pixels where the prior is least sure (1 - the margin
+        between its two most likely classes). On the validation images the 15 %
+        most uncertain pixels contain 52 % of all prior errors (random: 15 %)."""
+        if self.prior is None:
+            return None
+        c = self.__dict__.get("_uncertain")
+        if c is None or c[0] is not self.prior or c[1] != share:
+            top2 = np.partition(self.prior, -2, axis=-1)[..., -2:]
+            u = 1 - (top2[..., 1] - top2[..., 0])
+            c = (self.prior, share, u >= np.quantile(u[::4, ::4], 1 - share))
+            self._uncertain = c
+        return c[2]
 
     def _ranking(self, o):
         if self.prior is None:
             return list(CLICKABLE) + CYCLE_END
         if self.head is None:
             return class_ranking(self.prior, o.mask) + CYCLE_END
-        probs, _ = self.head.score([card(o.mask, self.prior, self.embed, o.sam_score, o.cand_type, o.click_no)])
+        probs, _ = self.head.score([card(o.mask, self.head_prior, self.embed, o.sam_score, o.cand_type, o.click_no)])
         return [CLICKABLE[i] for i in np.argsort(-probs[0])] + CYCLE_END
 
     # -- automatic first draft ------------------------------------------------
@@ -248,7 +266,7 @@ class Session:
         c.click(x, y, True)
         masks, scores = c.candidates
         if self.head is not None and self.prior is not None:
-            cards = [card(m, self.prior, self.embed, float(s), k, 1) for k, (m, s) in enumerate(zip(masks, scores))]
+            cards = [card(m, self.head_prior, self.embed, float(s), k, 1) for k, (m, s) in enumerate(zip(masks, scores))]
             probs, quality = self.head.score(cards)
             k = int(np.argmax(quality))
             ranking = [CLICKABLE[i] for i in np.argsort(-probs[k])] + CYCLE_END

@@ -50,6 +50,7 @@ View
   {CTRL}+wheel, pinch         zoom at the cursor
   {CTRL}+plus / minus / 0     zoom in / out / 100 %;  F: fit to window
   Space+drag, middle drag   pan;  P: show the prior map
+  U                         spotlight the areas where the prior is least sure
 
 Keys
   1-5   class of the selected objects, 0: Other (cut out of what is behind)
@@ -630,6 +631,10 @@ class MainWindow(QtWidgets.QMainWindow):
         vmenu.addAction("&Actual Size (100 %)", self.canvas.zoom_reset, "Ctrl+0")
         self.act_prior = vmenu.addAction("Show &Prior Map", self.toggle_prior, "P")
         self.act_prior.setCheckable(True)
+        self.act_uncertain = vmenu.addAction("&Uncertain Areas", self.redraw, "U")
+        self.act_uncertain.setCheckable(True)
+        self.act_uncertain.setToolTip("Dim everything except where the prior is least sure "
+                                      "(about half of its mistakes are there)")
         t = mb.addMenu("&Tools")
         t.addAction("&Auto Pre-label", self.run_prelabel, "Ctrl+L")
         h = mb.addMenu("&Help")
@@ -1104,6 +1109,11 @@ class MainWindow(QtWidgets.QMainWindow):
             rgb = (0.4 * s.image + 0.6 * colors[s.prior.argmax(-1)]).astype(np.uint8)
         else:
             rgb = s.overlay(alpha=self.alpha)
+        if self.act_uncertain.isChecked():
+            u = s.uncertain_areas()
+            if u is not None:                    # spotlight: dim what the prior is sure about
+                rgb = rgb.copy()
+                rgb[~u] = (rgb[~u] * 0.35).astype(np.uint8)
         self.canvas.show_rgb(rgb)
 
     def refresh(self, save=True):

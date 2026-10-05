@@ -129,6 +129,9 @@ def main():
     ap.add_argument("--sam-weights", type=Path, help="fine-tuned SAM decoder (sam/finetuned_decoder.pt)")
     ap.add_argument("--head", type=Path, default=paths.ARTIFACTS / "classhead" / "head_a.pt")
     ap.add_argument("--no-undo", action="store_true", help="keep actions that make the image worse")
+    ap.add_argument("--priors", default=paths.PRIOR_RUN,
+                    help="comma-separated prior runs whose probabilities are averaged for the draft "
+                         "(e.g. an ensemble); the class head always gets the first one")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 
@@ -141,7 +144,14 @@ def main():
         image = np.asarray(Image.open(paths.IMAGES_DIR / name).convert("RGB"))
         gt = semantic_mask(anns[name])
         s = Session(image, clicker, head)
-        s.set_prior(load_prior(paths.ARTIFACTS / "priors" / paths.PRIOR_RUN / f"{name}.npz"))
+        runs = args.priors.split(",")
+        priors = [load_prior(paths.ARTIFACTS / "priors" / r / f"{name}.npz") for r in runs]
+        if len(priors) > 1:
+            from dmgseg.tool.assign import fit_prior
+            h, w = priors[0].shape[:2]
+            s.set_prior(np.mean([fit_prior(p, h, w) for p in priors], axis=0), head_prior=priors[0])
+        else:
+            s.set_prior(priors[0])
         cms, actions = simulate(s, gt, args.budget, args.start, undo_worse=not args.no_undo)
         total = cms if total is None else total + cms
         per_image[name] = [round(float(miou(c)), 4) for c in cms]
