@@ -1,0 +1,35 @@
+# V3-640-stem: DINOv3 ViT-L/16 for the semantics + a CNN stem with real skip
+# connections at 1/8, 1/4, 1/2 (high-resolution detail path). B2b recipe, 640 px native.
+run_name: dinov3_emb_6c_v3_640_stem
+seed: 1212
+
+data:
+  label_kinds: [polygon, box, mask]
+  patch_size: 640                      # crop size
+  stride: 160
+  model_input: 640                     # no downscaling (DINOv2 used 518)
+
+model:
+  arch: vit_stem                       # ViT taps fused at 1/16 + CNN stem skips
+  backbone: vit_large_patch16_dinov3.lvd1689m
+  taps: [5, 11, 17, 23]                # evenly spaced deep layers (the stem brings the detail)
+  pretrained_backbone: true
+  num_classes: 6
+
+train:
+  epochs: 15
+  batch_size: 16
+  num_workers: 4
+  lr: 4.0e-5
+  weight_decay: 1.0e-3
+  layer_decay: 0.8
+  amp_dtype: float16
+  push_last_every: 0
+  scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
+  loss: {ce: 0.3, dice: 0.35, iou: 0.35}
+  class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]
+
+eval:
+  patch_size: 640
+  stride: 370                          # same overlap ratio as 518/300
+  model_input: 640

@@ -1,0 +1,35 @@
+# V3-640: DINOv3 ViT-L/16 in the paper's decoder (one-line backbone swap), B2b recipe.
+# 640 px crops at full resolution (DINOv3: patch 16, RoPE, trained up to 768 px).
+run_name: dinov3_emb_6c_v3_640
+seed: 1212
+
+data:
+  label_kinds: [polygon, box, mask]
+  patch_size: 640                      # crop size
+  stride: 160
+  model_input: 640                     # no downscaling (DINOv2 used 518)
+
+model:
+  arch: vit                            # all four taps at 1/16 (as in the paper's model)
+  backbone: vit_large_patch16_dinov3.lvd1689m
+  taps: [1, 7, 12, 20]                 # the paper's layers, for a clean A/B with B2b
+  pretrained_backbone: true
+  num_classes: 6
+
+train:
+  epochs: 15
+  batch_size: 16
+  num_workers: 4
+  lr: 4.0e-5
+  weight_decay: 1.0e-3
+  layer_decay: 0.8
+  amp_dtype: float16
+  push_last_every: 0
+  scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
+  loss: {ce: 0.3, dice: 0.35, iou: 0.35}
+  class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]
+
+eval:
+  patch_size: 640
+  stride: 370                          # same overlap ratio as 518/300
+  model_input: 640

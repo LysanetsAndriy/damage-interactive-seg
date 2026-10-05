@@ -25,7 +25,7 @@ from dmgseg.eval.metrics import SegMetrics, summary
 from dmgseg.prior.dataset import PatchedDataset, train_transform
 from dmgseg.prior.losses import CombinedLoss
 from dmgseg.prior.patches import build_patch_dataset
-from dmgseg.prior.unet_dinov2 import UNetDinoV2
+from dmgseg.prior.unet_dinov2 import build_prior_model
 
 
 def set_seed(seed):
@@ -73,6 +73,15 @@ def param_groups(model, lr, weight_decay, layer_decay=None):
     if not layer_decay or layer_decay >= 1:
         return [{"params": [p for p in model.parameters() if p.requires_grad],
                  "lr": lr, "weight_decay": weight_decay}]
+    if hasattr(model, "layer_id"):            # DINOv3 U-Nets define their own depths
+        top, groups = model.n_layers(), {}
+        for name, p in model.named_parameters():
+            if p.requires_grad:
+                layer = model.layer_id(name)
+                g = groups.setdefault(layer, {"params": [], "lr": lr * layer_decay ** (top - layer),
+                                              "weight_decay": weight_decay})
+                g["params"].append(p)
+        return [groups[k] for k in sorted(groups)]
     n_blocks = 1 + max(int(n.split("blocks.")[1].split(".")[0])
                        for n, _ in model.encoder.named_parameters() if "blocks." in n)
     top = n_blocks + 1  # decoder side
@@ -178,9 +187,8 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kw)
     print(f"patches: train={len(train_ds)} val={len(val_ds)} | device={device}")
 
-    model = UNetDinoV2(cfg.model.num_classes, cfg.model.backbone,
-                       pretrained=cfg.model.pretrained_backbone,
-                       img_size=cfg.model.get("img_size")).to(device)
+    model = build_prior_model(cfg.model, img_size=cfg.model.get("img_size")
+                              or (cfg.data.model_input if cfg.model.get("arch") else None)).to(device)
     weights = torch.tensor(cfg.train.class_weights, dtype=torch.float32, device=device)
     criterion = CombinedLoss(**cfg.train.loss, class_weights=weights).to(device)
     optimizer = torch.optim.AdamW(param_groups(model, cfg.train.lr, cfg.train.weight_decay,

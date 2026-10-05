@@ -32,7 +32,7 @@ def _():
     else:
         subprocess.run(["git", "clone", REPO_URL, str(REPO)], check=True)
 
-    _deps = ["timm", "albumentations", "huggingface_hub", "scikit-image",
+    _deps = ["timm>=1.0.20", "albumentations", "huggingface_hub", "scikit-image",
              "scikit-learn", "opencv-python-headless", "pyyaml"]
     try:
         subprocess.run(["uv", "pip", "install", "--python", sys.executable, *_deps], check=True)
@@ -632,6 +632,84 @@ def _(DEVICE, WORKDIR, j_button, mo):
     j_message = _j_start("j2_queue", WORKDIR, DEVICE, target=_j_cards, status=_j_status(WORKDIR, "j2_queue"),
                          sam_weights="sam/finetuned_decoder.pt", suffix="_samft")
     mo.md(f"**{j_message}**")
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## K. DINOv3 backbones (~4-5 h for all three)
+
+    B2b recipe, 640 px crops at full resolution (no 640 -> 518 downscaling):
+
+    - **V3-640** DINOv3 ViT-L/16 in the paper's decoder (backbone swap only)
+    - **V3-640-stem** DINOv3 ViT-L/16 + a CNN stem: real skip connections at 1/8, 1/4, 1/2
+    - **V3-CNX** DINOv3 ConvNeXt-L as a classic U-Net encoder (skips at 1/4, 1/8, 1/16)
+
+    Compared with the paper model and B2b (at 518 crops and at its 640 -> 518 training
+    scale) on the full validation images. Progress in the table below.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    k_button = mo.ui.run_button(label="Train V3-640, V3-640-stem, V3-CNX (~4-5 h)")
+    k_button
+    return (k_button,)
+
+
+@app.cell
+def _(DEVICE, REPO, WORKDIR, embed_fn, embed_model, hub, k_button, mo, paths):
+    mo.stop(not k_button.value)
+
+    from dmgseg.config import load_config as _k_load
+    from dmgseg.prior.compare import checkpoint_spec as _k_spec
+    from dmgseg.prior.experiments import start_in_background as _k_start
+
+    _k_b2b_cfg = _k_load(REPO / "configs" / "prior_dinov2_6c_b2b.yaml")
+    _k_b2b = hub.prior_weights(WORKDIR)
+    k_message = _k_start(
+        "k_queue",
+        [REPO / "configs" / f"prior_dinov3_6c_{_k}.yaml" for _k in ("v3_640", "v3_640_stem", "v3_cnx")],
+        WORKDIR, embed_model, embed_fn, DEVICE,
+        baselines={
+            "paper model": paths.PAPER_WEIGHTS,
+            "B2b": _k_b2b,
+            "B2b at training scale": {**_k_spec(_k_b2b_cfg, _k_b2b),
+                                      "eval": {"patch_size": 640, "stride": 370, "model_input": 518}},
+        },
+    )
+    mo.md(f"**{k_message}**")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    k_refresh = mo.ui.refresh(options=["30s", "1m", "5m"], default_interval="1m", label="Auto-refresh")
+    k_refresh
+    return (k_refresh,)
+
+
+@app.cell(hide_code=True)
+def _(WORKDIR, k_refresh, mo):
+    k_refresh
+
+    import json as _kjson
+
+    _rows = []
+    for _run in ("dinov3_emb_6c_v3_640", "dinov3_emb_6c_v3_640_stem", "dinov3_emb_6c_v3_cnx"):
+        _h = WORKDIR / "runs" / _run / "history.json"
+        for _r in (_kjson.loads(_h.read_text()) if _h.exists() else [])[-1:]:
+            _rows.append(f"| {_run} | {_r['epoch'] + 1}/15 | {_r['seconds']:.0f}s | {_r['val']['global/miou']:.4f} | {_r['val']['global/mf1']:.4f} |")
+    _p = WORKDIR / "runs" / "k_queue" / "status.json"
+    _kst = _kjson.loads(_p.read_text()) if _p.exists() else {}
+    mo.md(
+        f"**state:** {_kst.get('state', '-')} · **stage:** {_kst.get('stage', '-')} · **updated:** {_kst.get('updated', '-')}\n\n"
+        + "| run | epoch | time/epoch | val mIoU (patches) | val mF1 |\n|---|---|---|---|---|\n" + "\n".join(_rows)
+        + (f"\n\n**Result**\n\n{_kst['table']}" if _kst.get("table") else "")
+        + (f"\n\n```\n{_kst['error'][-1500:]}\n```" if _kst.get("error") else "")
+    )
     return
 
 

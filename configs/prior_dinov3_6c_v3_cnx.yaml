@@ -1,0 +1,35 @@
+# V3-CNX: DINOv3 ConvNeXt-L (CNN distilled from the DINOv3 teacher) as a classic U-Net
+# encoder with real skips at 1/4, 1/8, 1/16 (bottleneck 1/32). B2b recipe, 640 px native.
+run_name: dinov3_emb_6c_v3_cnx
+seed: 1212
+
+data:
+  label_kinds: [polygon, box, mask]
+  patch_size: 640                      # crop size
+  stride: 160
+  model_input: 640                     # no downscaling (DINOv2 used 518)
+
+model:
+  arch: convnext                       # pyramid encoder, U-Net decoder
+  backbone: convnext_large.dinov3_lvd1689m
+  taps: [0, 1, 2, 3]                   # the four ConvNeXt stages
+  pretrained_backbone: true
+  num_classes: 6
+
+train:
+  epochs: 15
+  batch_size: 16
+  num_workers: 4
+  lr: 4.0e-5
+  weight_decay: 1.0e-3
+  layer_decay: 0.8
+  amp_dtype: float16
+  push_last_every: 0
+  scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
+  loss: {ce: 0.3, dice: 0.35, iou: 0.35}
+  class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]
+
+eval:
+  patch_size: 640
+  stride: 370                          # same overlap ratio as 518/300
+  model_input: 640

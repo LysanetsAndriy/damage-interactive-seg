@@ -31,7 +31,8 @@ def checkpoint_spec(cfg, weights):
     """{weights, img_size, eval settings} for a trained run: evaluate at its training scale."""
     ev = dict(cfg.get("eval", {}))
     ev.setdefault("model_input", cfg.data.model_input)
-    return {"weights": weights, "img_size": cfg.model.get("img_size"), "eval": ev}
+    img_size = cfg.model.get("img_size") or (cfg.data.model_input if cfg.model.get("arch") else None)
+    return {"weights": weights, "img_size": img_size, "eval": ev, "model": dict(cfg.model)}
 
 
 def compare_checkpoints(checkpoints, embed_model, device, out_path, eval_cfg=None):
@@ -43,7 +44,7 @@ def compare_checkpoints(checkpoints, embed_model, device, out_path, eval_cfg=Non
     for name, spec in checkpoints.items():
         if not isinstance(spec, dict):
             spec = {"weights": spec, "img_size": None, "eval": eval_cfg or DEFAULT_EVAL}
-        model = load_prior_model(spec["weights"], device, img_size=spec["img_size"])
+        model = load_prior_model(spec["weights"], device, img_size=spec["img_size"], model_cfg=spec.get("model"))
         ev = {**DEFAULT_EVAL, **spec["eval"]}
         results[name] = {"eval": ev}
         for labels, kinds in (("paper_labels", PAPER_KINDS), ("fixed_labels", FIXED_KINDS)):

@@ -91,8 +91,24 @@ class UNetDinoV2(nn.Module):
         return self.conv_last(out)
 
 
-def load_prior_model(weights_path, device="cpu", img_size=None):
-    model = UNetDinoV2(pretrained=False, img_size=img_size)
+def load_prior_model(weights_path, device="cpu", img_size=None, model_cfg=None):
+    """model_cfg: the run's `model` config section (None = the paper's DINOv2 U-Net)."""
+    model = build_prior_model(model_cfg or {}, pretrained=False, img_size=img_size)
     state = torch.load(weights_path, map_location=device)
     model.load_state_dict(state, strict=True)
     return model.to(device).eval()
+
+
+def build_prior_model(model_cfg, pretrained=None, img_size=None):
+    """The prior network for a config's `model` section: the paper's DINOv2 U-Net
+    (default) or a DINOv3 U-Net (model.arch = vit / vit_stem / convnext)."""
+    model_cfg = dict(model_cfg)
+    arch = model_cfg.get("arch", "unet_dinov2")
+    pre = model_cfg.get("pretrained_backbone", False) if pretrained is None else pretrained
+    n = model_cfg.get("num_classes", NUM_CLASSES)
+    if arch == "unet_dinov2":
+        return UNetDinoV2(n, model_cfg.get("backbone", "vit_large_patch14_reg4_dinov2.lvd142m"),
+                          pretrained=pre, img_size=img_size or model_cfg.get("img_size"))
+    from dmgseg.prior.unet_v3 import UNetDinoV3
+    return UNetDinoV3(arch, n, backbone=model_cfg.get("backbone"), taps=model_cfg.get("taps"),
+                      pretrained=pre, img_size=img_size or model_cfg.get("img_size") or 640)
