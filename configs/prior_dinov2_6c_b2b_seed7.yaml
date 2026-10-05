@@ -1,0 +1,33 @@
+# B2b, second seed: how much does the score move with the seed alone?
+run_name: dinov2_emb_6c_b2b_seed7
+seed: 7
+
+data:
+  label_kinds: [polygon, box, mask]   # paper used [polygon, box]
+  patch_size: 640                      # crop size; patches are resized to model_input
+  stride: 160
+  model_input: 518                     # DINOv2 input size
+
+model:
+  backbone: vit_large_patch14_reg4_dinov2.lvd142m
+  pretrained_backbone: true
+  num_classes: 6
+
+train:
+  epochs: 15
+  batch_size: 16
+  num_workers: 4
+  lr: 4.0e-5                           # 2e-5 x sqrt(16/4)
+  weight_decay: 1.0e-3
+  layer_decay: 0.8                     # encoder block i of 21: lr x 0.8^(22 - (i+1))
+  amp_dtype: float16                   # torch.cuda.amp as in the paper
+  push_last_every: 0                   # no resume checkpoints on the Hub (storage limit)
+  scheduler: {type: cosine, warmup_epochs: 1, min_lr_ratio: 0.01}
+  loss: {ce: 0.3, dice: 0.35, iou: 0.35}
+  # Other, Building, Roof, Damage, Broken Window, Damaged roof (Table 7)
+  class_weights: [0.3, 1.0, 2.5, 1.5, 3.0, 2.8]
+
+eval:
+  # Full-image inference as in the notebook's evaluate_test_set
+  patch_size: 518
+  stride: 300

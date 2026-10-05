@@ -166,8 +166,18 @@ def train(cfg, workdir, embed_fn, device=None, push=True, max_batches=None, spli
     set_seed(cfg.seed)
     dirs = prepare_patches(cfg, embed_fn, workdir)
     size = cfg.data.model_input
+    copy_paste = None
+    if cfg.train.get("copy_paste"):
+        from dmgseg.prior.dataset import CopyPaste, build_object_bank
+        cp = dict(cfg.train.copy_paste)
+        train_anns, _ = split_annotations()
+        bank = build_object_bank(train_anns, tuple(cfg.data.label_kinds), cfg.data.patch_size)
+        print("copy-paste bank:", {c: len(v) for c, v in bank.items()})
+        copy_paste = CopyPaste(bank, size / cfg.data.patch_size, p=cp.get("p", 0.5),
+                               max_objects=cp.get("max_objects", 3), seed=cfg.seed)
     if split is None:
-        train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size))
+        train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size),
+                                  copy_paste=copy_paste)
         val_ds = PatchedDataset(dirs["val"], size=size)
     else:
         train_ds = PatchedDataset(dirs["train"], size=size, transform=train_transform(size),
