@@ -243,3 +243,52 @@ def sam3_job(workdir, device, status=None, max_images=None):
         import traceback
         status(state="error", error=traceback.format_exc()[-3000:])
         raise
+
+
+def e2_filtered(workdir, device, status=None, thresholds=(0.0, 0.2, 0.3, 0.4, 0.5, 0.6)):
+    """E2 for Broken Window with an exemplar, then the detections filtered by the
+    DINOv2 prior: keep a detection if the prior's mean Broken Window probability
+    inside it is >= t. -> recall of the other GT windows and extras per image per t."""
+    from dmgseg.data.split import load_split
+    from dmgseg.prior.kfold import load_prior
+    from dmgseg.tool.assign import fit_prior
+    status = status or (lambda **_: None)
+    anns = {a.name: a for a in parse_annotations(paths.ANNOTATIONS_XML)}
+    val = [anns[n] for n in load_split()["val"]]
+    prior_dir = Path(workdir) / "priors" / paths.PRIOR_RUN
+    model, proc = load(device)
+    rng = np.random.default_rng(0)
+    rows = []                                   # per detection: image, prior p(BW), best IoU with a GT window
+    n_others, n_images = 0, 0
+    for k, ann in enumerate(val):
+        same = [o.mask for o in image_objects(ann, 100) if o.label == 4]
+        if len(same) < 2:
+            continue
+        image = Image.open(paths.IMAGES_DIR / ann.name).convert("RGB")
+        ex = int(rng.integers(len(same)))
+        ys, xs = np.nonzero(same[ex])
+        box = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
+        others = [m for i, m in enumerate(same) if i != ex]
+        prior = fit_prior(load_prior(prior_dir / f"{ann.name}.npz"), ann.height, ann.width)[..., 4]
+        t = proc(images=image, input_boxes=[[box]], input_boxes_labels=[[1]], return_tensors="pt").to(device)
+        with torch.no_grad():
+            out = model(**t)
+        r = proc.post_process_instance_segmentation(out, threshold=0.4, mask_threshold=0.5,
+                                                    target_sizes=t.get("original_sizes").tolist())[0]
+        for m in r["masks"]:
+            m = m.cpu().numpy().astype(bool)
+            if not m.any() or (m & same[ex]).sum() >= 0.5 * m.sum():
+                continue
+            ious = [(m & g).sum() / max((m | g).sum(), 1) for g in others]
+            best = int(np.argmax(ious))
+            rows.append((n_images, float(prior[m].mean()), float(ious[best]), best))
+        n_others += len(others)
+        n_images += 1
+        status(state="E2 filtered", stage=f"{k + 1}/{len(val)}")
+    out = {}
+    for th in thresholds:
+        kept = [r for r in rows if r[1] >= th]
+        found = {(r[0], r[3]) for r in kept if r[2] >= 0.5}
+        extra = sum(1 for r in kept if r[2] < 0.5)
+        out[th] = {"recall": len(found) / max(n_others, 1), "extra_per_image": extra / max(n_images, 1)}
+    return {"images": n_images, "others": n_others, "by_threshold": out}
