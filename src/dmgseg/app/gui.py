@@ -633,7 +633,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addWidget(self.image_list)
         box.setVisible(False)
         self.images_box = box
-        # a toy slot machine for breaks (View > Slot Machine hides it)
+        # a toy slot machine for breaks (off by default: View > Slot Machine)
         left = QtWidgets.QWidget()
         lv = QtWidgets.QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -645,6 +645,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sl.addWidget(self.slots)
         lv.addStretch(0)
         lv.addWidget(self.slots_box)
+        self.slots_box.setVisible(False)
         return left
 
     def _side_panel(self):
@@ -729,9 +730,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_hover.setCheckable(True)
         self.act_hover.setChecked(True)
         self.act_hover.setToolTip("Outline the object a click would select, before clicking")
-        a = vmenu.addAction("&Slot Machine", lambda: self.slots_box.setVisible(not self.slots_box.isVisible()))
-        a.setCheckable(True)
-        a.setChecked(True)
+        self.act_slots = vmenu.addAction("&Slot Machine")
+        self.act_slots.setCheckable(True)
+        self.act_slots.setChecked(False)
+        self.act_slots.toggled.connect(self.slots_box.setVisible)
         a = vmenu.addAction("Zoom &In", lambda: self.canvas.zoom(1.25, at_cursor=False))
         a.setShortcuts([QtGui.QKeySequence.ZoomIn, QtGui.QKeySequence("Ctrl+=")])
         vmenu.addAction("Zoom &Out", lambda: self.canvas.zoom(0.8, at_cursor=False), QtGui.QKeySequence.ZoomOut)
@@ -1354,6 +1356,8 @@ def main(argv=None):
     settings = QtCore.QSettings("dmgseg", TITLE)
     win.auto_check.setChecked(settings.value("auto_prelabel", True, type=bool))
     win.auto_check.toggled.connect(lambda on: settings.setValue("auto_prelabel", on))
+    win.act_slots.setChecked(settings.value("slot_machine", False, type=bool))
+    win.act_slots.toggled.connect(lambda on: settings.setValue("slot_machine", on))
     win.show()
     if len(sys.argv) > 1:
         QtCore.QTimer.singleShot(0, lambda: _open_when_ready(win, sys.argv[1]))
