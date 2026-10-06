@@ -701,6 +701,8 @@ class MainWindow(QtWidgets.QMainWindow):
         tl.addWidget(self.caption)
         tl.addWidget(mb)
         self.setMenuWidget(top)
+        mb.setVisible(True)      # on macOS a menu bar inside the window stays hidden otherwise
+        self.menu_bar = mb
         f = mb.addMenu("&File")
         self.act_open = f.addAction("&Open Image...", self.open_dialog, QtGui.QKeySequence.Open)
         f.addAction("Open &Folder...", self.open_folder_dialog, "Ctrl+Shift+O")
@@ -756,6 +758,17 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DirOpenIcon), "Folder", self.open_folder_dialog)
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton), "Open", self.open_dialog)
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_DialogSaveButton), "Save", self.save_current)
+        export = QtWidgets.QToolButton()
+        export.setText("Export")
+        export.setIcon(st.standardIcon(QtWidgets.QStyle.SP_DriveFDIcon))
+        export.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        export.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        em = QtWidgets.QMenu(export)
+        em.addAction("CVAT XML for the whole folder... (Ctrl+Shift+E)", self.export_cvat_dialog)
+        em.addAction("Mask of this image (PNG + overlay + JSON)... (Ctrl+E)", self.export_dialog)
+        export.setMenu(em)
+        export.setToolTip("Export your labels in a readable format (CVAT XML like the paper's dataset, or PNG masks)")
+        tb.addWidget(export)
         tb.addSeparator()
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_MediaSeekBackward), "Prev", lambda: self.step(-1))
         tb.addAction(st.standardIcon(QtWidgets.QStyle.SP_MediaSeekForward), "Next", lambda: self.step(1))
@@ -1332,6 +1345,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def main(argv=None):
+    # keep the menu bar inside the window (Windows 98 look) instead of macOS's top bar
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeMenuBar, True)
     app = QtWidgets.QApplication(argv or sys.argv)
     app.setApplicationName(TITLE)
     apply_classic_style(app)
