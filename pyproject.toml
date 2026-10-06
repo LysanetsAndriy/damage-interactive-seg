@@ -37,8 +37,7 @@ app = [
 ]
 dev = [
     "pytest",
-    "marimo",
-]
+    "marimo", "onnx"]
 
 [build-system]
 requires = ["setuptools>=68"]
