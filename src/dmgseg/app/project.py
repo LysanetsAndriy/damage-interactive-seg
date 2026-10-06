@@ -50,11 +50,11 @@ class FolderProject:
         return self.prior_path(name).exists()
 
     def save_prior(self, name, probs):
-        from dmgseg.prior.kfold import save_prior
+        from dmgseg.prior.cache import save_prior
         save_prior(self.prior_path(name), probs)
 
     def load_prior(self, name):
-        from dmgseg.prior.kfold import load_prior
+        from dmgseg.prior.cache import load_prior
         return load_prior(self.prior_path(name))
 
     def n_objects(self, name):

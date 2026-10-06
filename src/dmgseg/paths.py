@@ -5,6 +5,7 @@ folder returned by `huggingface_hub.snapshot_download` and DMGSEG_ARTIFACTS to a
 writable directory.
 """
 import os
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -42,3 +43,12 @@ SPLIT_FILE = PROJECT_ROOT / "data" / "splits" / "paper_split.json"
 
 # Private Hugging Face dataset repo with the images, annotations and all weights.
 HF_REPO = os.environ.get("DMGSEG_HF_REPO", "cTaJloHe-Ka4yP/damage-seg-data")
+
+# ONNX models of the app (dmgseg.onnx.export). In the packaged app they sit inside
+# the bundle (PyInstaller: sys._MEIPASS/models).
+if getattr(sys, "frozen", False):
+    ONNX_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "models"
+else:
+    ONNX_DIR = Path(os.environ.get("DMGSEG_ONNX", ARTIFACTS / "onnx"))
+# "onnx" (default when the ONNX models exist) or "torch"
+BACKEND = os.environ.get("DMGSEG_BACKEND", "onnx" if (ONNX_DIR / "prior.onnx").exists() else "torch")

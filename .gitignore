@@ -26,3 +26,5 @@ __pycache__/
 
 # vendored sources (SAM 2)
 third_party/
+packaging/dist/
+packaging/build/

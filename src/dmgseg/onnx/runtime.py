@@ -23,6 +23,7 @@ STD = np.array([0.229, 0.224, 0.225], np.float32)
 def session(path, threads=None):
     opt = ort.SessionOptions()
     opt.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opt.log_severity_level = 3              # errors only (a harmless shape-merge warning otherwise)
     if threads:
         opt.intra_op_num_threads = threads
     return ort.InferenceSession(str(path), opt, providers=["CPUExecutionProvider"])
@@ -132,6 +133,111 @@ class OnnxPrior:
 class OnnxHead:
     def __init__(self, folder=ONNX_DIR):
         self.net = session(Path(folder) / "head_a.onnx")
+
+    def score(self, cards):
+        logits, q = self.net.run(None, {"cards": np.stack(cards).astype(np.float32)})
+        e = np.exp(logits - logits.max(1, keepdims=True))
+        return e / e.sum(1, keepdims=True), 1 / (1 + np.exp(-q))
+
+
+class OnnxSamClicker:
+    """The app's SAM clicker (sam/predictor.SamClicker) on ONNX Runtime: the same
+    attributes and methods, so the engine, the draft, loops, lines and the hover
+    preview work unchanged. Sessions are shared by twins; each twin has its own
+    image features and object state (ONNX Runtime sessions are thread-safe)."""
+
+    def __init__(self, folder=ONNX_DIR, sam=None):
+        self.sam = sam or OnnxSam(folder)
+        self.choose = "score"
+        self._features = None
+        self.reset_object()
+
+    # -- image ---------------------------------------------------------------
+    def set_image(self, rgb):
+        self.sam.set_image(np.asarray(rgb))
+        self._features = (self.sam.features, self.sam.orig_hw)
+        self.reset_object()
+
+    def features(self):
+        return {"features": self._features[0], "orig_hw": list(self._features[1])}
+
+    def set_features(self, f):
+        self._features = (f["features"], tuple(f["orig_hw"]))
+        self.reset_object()
+
+    @property
+    def image_embedding(self):
+        return self._features[0][0][0]                       # (256, 64, 64) numpy
+
+    def twin(self):
+        t = OnnxSamClicker(sam=_SamView(self.sam))
+        return t
+
+    # -- prompts ---------------------------------------------------------------
+    def _run(self, points, labels, mask_input, multimask):
+        self.sam.features, self.sam.orig_hw = self._features
+        return self.sam.predict(points, labels, mask_input, multimask)
+
+    def reset_object(self):
+        self.points, self.labels, self.logits = [], [], None
+        self.candidates = None
+
+    def click(self, x, y, positive=True):
+        self.points.append((x, y))
+        self.labels.append(1 if positive else 0)
+        first = self.logits is None
+        masks, scores, logits = self._run(self.points, self.labels, None if first else self.logits, first)
+        if first:
+            self.first_logits = logits
+            self.candidates = (masks, scores)
+            k = int(np.argmax(scores))
+        else:
+            k = 0
+        self.logits = logits[k]
+        self.last_score = float(scores[k])
+        return masks[k]
+
+    def box_click(self, box, x, y):
+        self.reset_object()
+        x0, y0, x1, y1 = box
+        self.points, self.labels = [(x0, y0), (x1, y1), (x, y)], [2, 3, 1]
+        masks, scores, logits = self._run(self.points, self.labels, None, False)
+        self.logits, self.last_score = logits[0], float(scores[0])
+        return masks[0]
+
+    def prompt(self, points, labels, mask_input=None):
+        self.points, self.labels = [tuple(p) for p in points], list(labels)
+        masks, scores, logits = self._run(self.points, self.labels, mask_input, False)
+        self.logits, self.last_score = logits[0], float(scores[0])
+        return masks[0]
+
+    def predict_raw(self, points, labels, multimask=False):
+        return self._run(points, labels, None, multimask)
+
+    def set_state(self, points, labels, logits, score):
+        self.points, self.labels = [tuple(p) for p in points], list(labels)
+        self.logits, self.last_score = logits, float(score)
+
+    def choose_index(self, k):
+        masks, scores = self.candidates
+        self.logits = self.first_logits[k]
+        self.last_score = float(scores[k])
+        return masks[k]
+
+
+class _SamView(OnnxSam):
+    """Shares another OnnxSam's sessions (no second copy of the networks)."""
+
+    def __init__(self, other):
+        self.meta, self.enc, self.dec = other.meta, other.enc, other.dec
+        self.features = self.orig_hw = None
+
+
+class OnnxClassHead:
+    """engine.ClassHead on ONNX Runtime."""
+
+    def __init__(self, path):
+        self.net = session(path)
 
     def score(self, cards):
         logits, q = self.net.run(None, {"cards": np.stack(cards).astype(np.float32)})

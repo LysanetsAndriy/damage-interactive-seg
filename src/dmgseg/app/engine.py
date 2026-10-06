@@ -17,10 +17,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
 
 from dmgseg.classhead.features import CARD_SIZE, REFINED, card
-from dmgseg.classhead.mlp import CardHead, predict
 from dmgseg.data.cvat import CLASS_NAMES
 from dmgseg.tool.assign import CLICKABLE, class_ranking, fit_prior
 from dmgseg.tool.lasso import grab, loop_object, polygon_mask, stroke_points
@@ -148,15 +146,25 @@ def blend_labels(image, lm, alpha, other=None):
 
 
 class ClassHead:
-    """Head A (MLP on description cards)."""
+    """Head A (MLP on description cards): PyTorch weights (.pt) or ONNX (.onnx)."""
 
     def __init__(self, weights):
+        if str(weights).endswith(".onnx"):
+            from dmgseg.onnx.runtime import OnnxClassHead
+            self._onnx, self.model = OnnxClassHead(weights), None
+            return
+        import torch
+        from dmgseg.classhead.mlp import CardHead
+        self._onnx = None
         self.model = CardHead(CARD_SIZE)
         self.model.load_state_dict(torch.load(weights, map_location="cpu"))
         self.model.eval()
 
     def score(self, cards):
         """-> class probabilities (n, 5) in CLICKABLE order, quality (n,)."""
+        if self._onnx is not None:
+            return self._onnx.score(cards)
+        from dmgseg.classhead.mlp import predict
         return predict(self.model, np.stack(cards).astype(np.float32))
 
 

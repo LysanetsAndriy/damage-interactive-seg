@@ -12,8 +12,6 @@ Card layout (288 float32):
 """
 import cv2
 import numpy as np
-import torch.nn.functional as F
-import torch
 
 N_CLASSES = 6
 GROUPS = {"prior_in": 12, "prior_ring": 6, "sam": 256, "geometry": 8, "sam_info": 6}
@@ -66,15 +64,31 @@ def _geometry(mask):
     ], np.float32)
 
 
+def _adaptive_weights(mask, out_h, out_w):
+    """F.adaptive_avg_pool2d of a 2-D mask to (out_h, out_w), in numpy: cell (i, j)
+    averages rows floor(i*H/out_h) .. ceil((i+1)*H/out_h) (same for columns)."""
+    m = mask.astype(np.float64)
+    H, W = m.shape
+    ii = np.zeros((H + 1, W + 1))
+    ii[1:, 1:] = m.cumsum(0).cumsum(1)                       # integral image
+    r = np.arange(out_h)
+    c = np.arange(out_w)
+    r0, r1 = (r * H) // out_h, -((-(r + 1) * H) // out_h)
+    c0, c1 = (c * W) // out_w, -((-(c + 1) * W) // out_w)
+    s = ii[r1][:, c1] - ii[r0][:, c1] - ii[r1][:, c0] + ii[r0][:, c0]
+    return s / ((r1 - r0)[:, None] * (c1 - c0)[None, :])
+
+
 def sam_pool(sam_embed, mask):
     """Average SAM's (256, 64, 64) embedding over the mask (mask resized with area
-    weighting, so tiny objects still contribute)."""
-    m = torch.from_numpy(mask.astype(np.float32))[None, None].to(sam_embed.device)
-    weights = F.adaptive_avg_pool2d(m, sam_embed.shape[-2:])[0, 0]
+    weighting, so tiny objects still contribute). sam_embed: numpy array or torch
+    tensor (PyTorch backend)."""
+    E = sam_embed if isinstance(sam_embed, np.ndarray) else sam_embed.float().cpu().numpy()
+    weights = _adaptive_weights(mask, E.shape[-2], E.shape[-1]).astype(np.float32)
     total = weights.sum()
     if total <= 0:
-        return np.zeros(sam_embed.shape[0], np.float32)
-    return ((sam_embed * weights).sum((-2, -1)) / total).float().cpu().numpy()
+        return np.zeros(E.shape[0], np.float32)
+    return ((E * weights).sum((-2, -1)) / total).astype(np.float32)
 
 
 def card(mask, prior, sam_embed, sam_score, cand_type, click_no):

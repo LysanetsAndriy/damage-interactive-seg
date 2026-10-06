@@ -87,3 +87,18 @@ ready get their class when it arrives.
 - `src/dmgseg/classhead` — class head A (MLP on cards) and B (fusion on feature maps)
 - `src/dmgseg/app` — the desktop app: `engine.py` (logic, GUI-free) and `gui.py` (Qt)
 - `nb/` — thin marimo notebooks for molab
+
+
+## Packaged macOS app (no Python, no PyTorch)
+
+The app runs on ONNX Runtime when `artifacts/onnx/` exists (`python -m dmgseg.onnx.export`
+creates it; outputs identical to PyTorch, see `scripts/onnx_check.py`). Build:
+
+```bash
+./packaging/build_mac.sh     # -> packaging/dist/Damage Annotator.app and DamageAnnotator-<arch>.dmg
+```
+
+PyInstaller bundles the code and the five ONNX models (~2.1 GB; the program itself ~0.4 GB),
+runs the packaged app's `--selftest`, and wraps it in a .dmg (drag to Applications).
+The app is not signed: on another Mac, right-click > Open the first time.
+Built on an Intel Mac it is x86_64 (Apple Silicon runs it via Rosetta).

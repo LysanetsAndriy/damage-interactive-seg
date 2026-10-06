@@ -166,7 +166,11 @@ class Models:
         return f
 
     def load(self, progress=None):
-        from dmgseg import hub, paths
+        from dmgseg import paths
+        self.backend = paths.BACKEND
+        if self.backend == "onnx":
+            return self._load_onnx(paths.ONNX_DIR, progress)
+        from dmgseg import hub
         from dmgseg.prior.embedding import load_embedding_model
         from dmgseg.prior.unet_dinov2 import load_prior_model
         from dmgseg.sam.predictor import SamClicker
@@ -194,7 +198,22 @@ class Models:
         progress and progress(4, steps)
         return self
 
+    def _load_onnx(self, folder, progress=None):
+        """The same networks exported to ONNX (dmgseg.onnx.export): no PyTorch."""
+        from dmgseg.onnx.runtime import OnnxPrior, OnnxSamClicker
+        self.clicker = OnnxSamClicker(folder)
+        self.sam_finetuned = True
+        self.encoder, self.drafter, self.hover = self.clicker.twin(), self.clicker.twin(), self.clicker.twin()
+        progress and progress(1, 3)
+        self.head = ClassHead(folder / "head_a.onnx")
+        progress and progress(2, 3)
+        self.prior_model = self.embed_model = OnnxPrior(folder)
+        progress and progress(3, 3)
+        return self
+
     def compute_prior(self, image, progress=None):
+        if getattr(self, "backend", "torch") == "onnx":
+            return self.prior_model.predict_probs(np.asarray(image), batch=2, progress=progress)
         from dmgseg.prior.infer import predict_probs
         probs, _ = predict_probs(self.prior_model, self.embed_model, Image.fromarray(image),
                                  batch_size=2, progress=progress)
@@ -311,8 +330,12 @@ class HoverWorker:
 
 
 def torch_inference():
-    import torch
-    return torch.inference_mode()
+    try:
+        import torch
+        return torch.inference_mode()
+    except ImportError:                       # the packaged app has no PyTorch (ONNX backend)
+        import contextlib
+        return contextlib.nullcontext()
 
 
 def mask_path(mask, max_points=4000):
@@ -619,7 +642,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.models = Models()
             self.status("Loading models (SAM, class head, prior)...")
             self.run_bg(self.models.load, on_done=lambda m: self.status(
-                "Ready (SAM: " + ("fine-tuned" if m.sam_finetuned else "zero-shot") + "). File > Open Image..."),
+                "Ready (SAM: " + ("fine-tuned" if m.sam_finetuned else "zero-shot") + f", {m.backend.upper()}). "
+                "Open a folder or an image..."),
                         progress=lambda d, t: self.progress.setValue(int(100 * d / t)))
 
     # -- layout pieces ---------------------------------------------------------
@@ -1347,6 +1371,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def main(argv=None):
+    if "--selftest" in (argv or sys.argv):
+        from dmgseg.app.selftest import run
+        return run()
     # keep the menu bar inside the window (Windows 98 look) instead of macOS's top bar
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeMenuBar, True)
     app = QtWidgets.QApplication(argv or sys.argv)
@@ -1359,8 +1386,9 @@ def main(argv=None):
     win.act_slots.setChecked(settings.value("slot_machine", False, type=bool))
     win.act_slots.toggled.connect(lambda on: settings.setValue("slot_machine", on))
     win.show()
-    if len(sys.argv) > 1:
-        QtCore.QTimer.singleShot(0, lambda: _open_when_ready(win, sys.argv[1]))
+    args = [a for a in sys.argv[1:] if not a.startswith("-") and Path(a).exists()]   # (macOS may add -psn_...)
+    if args:
+        QtCore.QTimer.singleShot(0, lambda: _open_when_ready(win, args[0]))
     return app.exec()
 
 

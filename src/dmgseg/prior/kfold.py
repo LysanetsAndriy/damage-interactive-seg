@@ -25,14 +25,7 @@ from dmgseg.prior.train import train
 from dmgseg.prior.unet_dinov2 import load_prior_model
 
 
-def save_prior(path, probs):
-    q = np.clip(np.rint(probs * 255), 0, 255).astype(np.uint8).transpose(2, 0, 1)
-    np.savez_compressed(path, probs=q)
-
-
-def load_prior(path):
-    """-> float32 (H, W, C) probabilities."""
-    return np.load(path)["probs"].transpose(1, 2, 0).astype(np.float32) / 255.0
+from dmgseg.prior.cache import load_prior, save_prior  # noqa: E402,F401  (kept importable from here)
 
 
 def cache_priors(model, embed_model, names, out_dir, device, patch_size=518, stride=300,
