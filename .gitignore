@@ -28,3 +28,4 @@ __pycache__/
 third_party/
 packaging/dist/
 packaging/build/
+packaging/build_log.txt
