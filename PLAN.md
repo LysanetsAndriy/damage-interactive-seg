@@ -557,3 +557,10 @@ Today is Tue 29 Sep; the deadline is Sat 22 Nov (~7.5 weeks). **End of week 3 = 
 - A Hugging Face private repo for data (instead of Google Drive).
 - **A new GitHub repo for this project** (not the paper's repo).
 - The report language: English by default. Tell me if the lab needs Ukrainian.
+
+
+## Status 2026-10-06
+The tool is finished for the lab: app (source and packaged ONNX .app/.dmg, Intel Mac),
+all features tested. **Decision (user): no public distribution for now** (GitHub
+Releases / fp16 models / CI builds for Windows, Linux, Apple Silicon only if the
+teacher wants it deployed). Remaining: the lab report (deadline 2026-11-22).
